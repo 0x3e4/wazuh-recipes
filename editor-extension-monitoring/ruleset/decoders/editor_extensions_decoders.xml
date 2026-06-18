@@ -1,0 +1,23 @@
+<!--
+  Decoder for the editor-extensions inventory (VS Code / Visual Studio), delivered via a
+  command localfile in the 'dev' group agent.conf.
+
+  The agent emits (out_format adds the syslog header + program_name; the logcollector adds
+  the 'ossec: output:' wrapper around the raw line):
+    <ts> <host> editor-extensions: ossec: output: 'editor-extensions': {"integration":"editor-extensions",...}
+
+  Pattern mirrors the shipped 0005-wazuh_decoders.xml "FIM DB" decoder, which is the proven
+  way to JSON-decode a prefixed command line:
+    parent program_name  ->  child prematch (offset after_parent)  ->  JSON_Decoder (offset after_prematch)
+  JSON_Decoder flattens keys to the event ROOT (integration, editor, extension_id, ...).
+-->
+<decoder name="editor-extensions">
+  <program_name>^editor-extensions$</program_name>
+</decoder>
+
+<decoder name="editor-extensions-child">
+  <parent>editor-extensions</parent>
+  <prematch offset="after_parent">^ossec: output: 'editor-extensions': </prematch>
+  <plugin_decoder offset="after_prematch">JSON_Decoder</plugin_decoder>
+  <json_null_field>discard</json_null_field>
+</decoder>

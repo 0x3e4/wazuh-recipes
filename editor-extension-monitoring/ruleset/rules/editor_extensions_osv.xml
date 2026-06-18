@@ -1,0 +1,156 @@
+<!-- AUTO-GENERATED from OSV (osv.dev VSCode ecosystem) by osv-vscode-sync.py. DO NOT EDIT BY HAND. -->
+<!-- Version-aware: only OSV-listed affected versions match, so legit versions of compromised -->
+<!-- extensions (e.g. nrwl.angular-console 18.101.x) are NOT flagged. Children of rule 102010. -->
+<group name="editor_extensions,editor_extension_inventory,osv,">
+  <rule id="102100" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^aquasecurityofficial\.trivy-vulnerability-scanner$</field>
+    <field name="version" type="pcre2">^(1\.8\.12|1\.8\.13)$</field>
+    <description>MAL-2026-2230: malicious/compromised editor extension aquasecurityofficial.trivy-vulnerability-scanner v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102101" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^checkmarx\.ast-results$</field>
+    <field name="version" type="pcre2">^(2\.35\.0|2\.36\.0|2\.37\.0|2\.38\.0|2\.39\.0|2\.40\.0|2\.42\.0|2\.43\.0|2\.44\.0|2\.45\.0|2\.46\.0|2\.47\.0|2\.48\.0|2\.49\.0|2\.49\.1772191521|2\.49\.1772192163|2\.50\.0|2\.51\.0|2\.52\.0|2\.53\.0|2\.56\.0)$</field>
+    <description>MAL-2026-2231: malicious/compromised editor extension checkmarx.ast-results v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102102" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^checkmarx\.cx-dev-assist$</field>
+    <field name="version" type="pcre2">^(1\.1\.0|1\.10\.0|1\.2\.0|1\.3\.0|1\.3\.1772191535|1\.3\.1772192178|1\.4\.0|1\.5\.0|1\.6\.0|1\.7\.0)$</field>
+    <description>MAL-2026-2232: malicious/compromised editor extension checkmarx.cx-dev-assist v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102103" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^cline-ai-main\.cline-ai-agent$</field>
+    <field name="version" type="pcre2">^(3\.1\.3)$</field>
+    <description>MAL-2025-191157: malicious/compromised editor extension cline-ai-main.cline-ai-agent v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102104" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^CodeInKlingon\.git-worktree-menu$</field>
+    <field name="version" type="pcre2">^(1\.0\.9|1\.0\.91)$</field>
+    <description>MAL-2025-191158: malicious/compromised editor extension CodeInKlingon.git-worktree-menu v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102105" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^codejoy\.codejoy-vscode-extension$</field>
+    <field name="version" type="pcre2">^(1\.8\.3|1\.8\.4)$</field>
+    <description>MAL-2025-191159: malicious/compromised editor extension codejoy.codejoy-vscode-extension v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102106" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^EffetMer\.darkgpt$</field>
+    <description>MAL-2025-192568: malicious/compromised editor extension EffetMer.darkgpt (all versions) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102107" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^ellacrity\.recoil$</field>
+    <field name="version" type="pcre2">^(0\.7\.4)$</field>
+    <description>MAL-2025-191160: malicious/compromised editor extension ellacrity.recoil v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102108" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^ginfuru\.better-nunjucks$</field>
+    <field name="version" type="pcre2">^(0\.3\.2)$</field>
+    <description>MAL-2025-191161: malicious/compromised editor extension ginfuru.better-nunjucks v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102109" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^grrrck\.positron-plus-1-e$</field>
+    <field name="version" type="pcre2">^(0\.0\.71)$</field>
+    <description>MAL-2025-191162: malicious/compromised editor extension grrrck.positron-plus-1-e v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102110" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^jeronimoekerdt\.color-picker-universal$</field>
+    <field name="version" type="pcre2">^(2\.8\.91)$</field>
+    <description>MAL-2025-191163: malicious/compromised editor extension jeronimoekerdt.color-picker-universal v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102111" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^JScearcy\.rust-doc-viewer$</field>
+    <field name="version" type="pcre2">^(4\.2\.1)$</field>
+    <description>MAL-2025-191164: malicious/compromised editor extension JScearcy.rust-doc-viewer v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102112" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^kleinesfilmroellchen\.serenity-dsl-syntaxhighlight$</field>
+    <field name="version" type="pcre2">^(0\.3\.2)$</field>
+    <description>MAL-2025-191165: malicious/compromised editor extension kleinesfilmroellchen.serenity-dsl-syntaxhighlight v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102113" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^l-igh-t\.vscode-theme-seti-folder$</field>
+    <field name="version" type="pcre2">^(1\.2\.3)$</field>
+    <description>MAL-2025-191166: malicious/compromised editor extension l-igh-t.vscode-theme-seti-folder v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102114" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^nrwl\.angular-console$</field>
+    <field name="version" type="pcre2">^(18\.95\.0)$</field>
+    <description>MAL-2026-5161: malicious/compromised editor extension nrwl.angular-console v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102115" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^SIRILMP\.dark-theme-sm$</field>
+    <field name="version" type="pcre2">^(3\.11\.4)$</field>
+    <description>MAL-2025-191167: malicious/compromised editor extension SIRILMP.dark-theme-sm v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102116" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^sissel\.shopify-liquid$</field>
+    <field name="version" type="pcre2">^(4\.0\.1)$</field>
+    <description>MAL-2025-191168: malicious/compromised editor extension sissel.shopify-liquid v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102117" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^srcery-colors\.srcery-colors$</field>
+    <field name="version" type="pcre2">^(0\.3\.9)$</field>
+    <description>MAL-2025-191169: malicious/compromised editor extension srcery-colors.srcery-colors v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+  <rule id="102118" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^TretinV3\.forts-api-extention$</field>
+    <field name="version" type="pcre2">^(0\.3\.1)$</field>
+    <description>MAL-2025-191170: malicious/compromised editor extension TretinV3.forts-api-extention v$(version) [$(editor)] user $(dstuser).</description>
+    <mitre><id>T1176</id><id>T1195.002</id></mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+</group>

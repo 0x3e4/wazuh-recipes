@@ -1,0 +1,98 @@
+<!--
+  Editor extension monitoring (VS Code / Visual Studio). Custom range: 102000-102099.
+
+  Two complementary sources:
+    1. FIM (syscheck) on the extension dirs  -> rules 102000-102003 (real-time change detection).
+    2. Command-localfile inventory (Get-EditorExtensions.ps1, JSON via editor-extensions decoder)
+       -> rules 102010-102012 (structured inventory: name / publisher / version, + denylist).
+
+  Denylist is the alternation in 102001 (path-based, FIM) and 102012 (extension_id, inventory).
+  Seed both from authoritative sources (CISA / MS Marketplace / OpenVSX removals / vendor writeups).
+  FIM path regexes use \\+ to match single- or double-backslash escaping (verify with wazuh-logtest).
+-->
+
+<!-- ================= FIM change detection ================= -->
+<group name="editor_extensions,syscheck,">
+
+  <rule id="102000" level="5">
+    <if_sid>554</if_sid>
+    <field name="file" type="pcre2">(?i)\\+(\.vscode|\.vscode-insiders|\.vscode-server)\\+extensions\\+|\\+Microsoft\\+VisualStudio\\+[^\\]+\\+Extensions\\+</field>
+    <description>Editor extension content added: $(file)</description>
+    <mitre>
+      <id>T1176</id>
+    </mitre>
+    <group>editor_extension_added,</group>
+  </rule>
+
+  <!-- Denylist (folder-name match, VS Code family). Sources: ReversingLabs (ahban ransomware),
+       BleepingComputer (WhiteCobra crypto-stealers), MS Marketplace removals (BigBlack), brand
+       impersonation (automatedlogic/webctrl). Exact publisher.name only — typosquats, NOT the
+       legitimate originals (e.g. juan-blanco != JuanBlanco). Reviewed 2026-06-18. -->
+  <rule id="102001" level="12">
+    <if_sid>102000</if_sid>
+    <field name="file" type="pcre2">(?i)\\+extensions\\+(ahban\.shiba|ahban\.cychelloworld|ahbanc\.shiba|contractshark\.solidity-lang|bigblack\.codo-ai|bigblack\.bitcoin-black|bigblack\.mrbigblacktheme|chaindevtools\.solidity-pro|kilocode-ai\.kilo-code|nomic-fdn\.hardhat-solidity|nomic-fdn\.solidity-hardhat|nomic-foundation\.hardhat-solidity|oxc-vscode\.oxc|juan-blanco\.solidity|juan-blanco\.vscode-solidity|juanfblanco\.solidity-ai-ethereum|juanfblanco\.awswhh|kineticsquid\.solidity-ethereum-vsc|ethfoundry\.solidityethereum|ethfoundry\.etherfoundrys|ethereum\.solidity-ethereum|crypto-extensions\.solidity|crypto-extensions\.snowshsono|ellisonbrett\.givingblankies|marcuslockwood\.wgbk|vitalikbuterin-ethfoundation\.blan-co|showsnowcrypto\.snowshono|rojo\.rojo-roblox-vscode|automatedlogic\.automatedlogic|automated1ogic\.automated1ogic|webctrl\.live)-</field>
+    <description>KNOWN-MALICIOUS/banned editor extension installed: $(file)</description>
+    <mitre>
+      <id>T1176</id>
+      <id>T1195.002</id>
+    </mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+
+  <rule id="102002" level="5">
+    <if_sid>553</if_sid>
+    <field name="file" type="pcre2">(?i)\\+(\.vscode|\.vscode-insiders|\.vscode-server)\\+extensions\\+|\\+Microsoft\\+VisualStudio\\+[^\\]+\\+Extensions\\+</field>
+    <description>Editor extension content removed: $(file)</description>
+    <mitre>
+      <id>T1070.004</id>
+    </mitre>
+    <group>editor_extension_removed,</group>
+  </rule>
+
+  <rule id="102003" level="3">
+    <if_sid>550</if_sid>
+    <field name="file" type="pcre2">(?i)\\+(\.vscode|\.vscode-insiders|\.vscode-server)\\+extensions\\+|\\+Microsoft\\+VisualStudio\\+[^\\]+\\+Extensions\\+</field>
+    <description>Editor extension content modified: $(file)</description>
+    <group>editor_extension_modified,</group>
+  </rule>
+
+</group>
+
+<!-- ================= Structured inventory (command localfile / JSON) ================= -->
+<group name="editor_extensions,editor_extension_inventory,">
+
+  <!-- 102010: base — JSON inventory event decoded by the editor-extensions decoder -->
+  <rule id="102010" level="0">
+    <decoded_as>editor-extensions</decoded_as>
+    <field name="integration">^editor-extensions$</field>
+    <description>Editor extension inventory event.</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <!-- 102011: one inventory record per extension (low level; this is the inventory feed) -->
+  <rule id="102011" level="3">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">.+</field>
+    <description>Editor extension inventory: $(extension_name) v$(version) by $(publisher) [$(editor)] (user $(dstuser)).</description>
+    <mitre>
+      <id>T1176</id>
+    </mitre>
+    <group>editor_extension_inventory,</group>
+  </rule>
+
+  <!-- 102012: inventory entry matches a BANNED / KNOWN-MALICIOUS extension id (denylist) -->
+  <!-- Denylist (exact extension_id, inventory feed). Same sourced list as 102001. Exact-anchored
+       so typosquats match but legitimate originals (JuanBlanco.solidity, NomicFoundation.hardhat-solidity,
+       kilocode.kilo-code, oxc.oxc-vscode) do NOT. Extend as new advisories land; then restart manager. -->
+  <rule id="102012" level="12">
+    <if_sid>102010</if_sid>
+    <field name="extension_id" type="pcre2">(?i)^(ahban\.shiba|ahban\.cychelloworld|ahbanc\.shiba|contractshark\.solidity-lang|bigblack\.codo-ai|bigblack\.bitcoin-black|bigblack\.mrbigblacktheme|chaindevtools\.solidity-pro|kilocode-ai\.kilo-code|nomic-fdn\.hardhat-solidity|nomic-fdn\.solidity-hardhat|nomic-foundation\.hardhat-solidity|oxc-vscode\.oxc|juan-blanco\.solidity|juan-blanco\.vscode-solidity|juanfblanco\.solidity-ai-ethereum|juanfblanco\.awswhh|kineticsquid\.solidity-ethereum-vsc|ethfoundry\.solidityethereum|ethfoundry\.etherfoundrys|ethereum\.solidity-ethereum|crypto-extensions\.solidity|crypto-extensions\.snowshsono|ellisonbrett\.givingblankies|marcuslockwood\.wgbk|vitalikbuterin-ethfoundation\.blan-co|showsnowcrypto\.snowshono|rojo\.rojo-roblox-vscode|automatedlogic\.automatedlogic|automated1ogic\.automated1ogic|webctrl\.live)$</field>
+    <description>KNOWN-MALICIOUS/banned editor extension present: $(extension_name) ($(extension_id)) [$(editor)] user $(dstuser).</description>
+    <mitre>
+      <id>T1176</id>
+      <id>T1195.002</id>
+    </mitre>
+    <group>editor_extension_malicious,</group>
+  </rule>
+
+</group>

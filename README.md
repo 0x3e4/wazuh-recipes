@@ -9,7 +9,7 @@ decoders, rules, dashboards and any automation — with its own README and insta
 | Recipe | What it does |
 |--------|--------------|
 | [editor-extension-monitoring](editor-extension-monitoring/) | Inventory installed VS Code / Visual Studio extensions across Windows endpoints and alert on banned or known-malicious ones — version-aware, with an automated [OSV.dev](https://osv.dev) feed. |
-| [critical-vuln-email-digest](critical-vuln-email-digest/) | Turn Wazuh's vulnerability inventory into low-noise email tickets — one per product to remediate (CVEs, versions and agents merged), de-duplicated, with hourly tickets and a weekly report. |
+| [vuln-email-digest](vuln-email-digest/) | Turn Wazuh's vulnerability inventory into low-noise email tickets — one per product to remediate (CVEs, versions and agents merged), de-duplicated, with hourly tickets and a weekly report. |
 
 ## Using a recipe
 

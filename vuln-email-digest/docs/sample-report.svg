@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="400" viewBox="0 0 880 400" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <rect width="880" height="400" fill="#e9edf2"/>
+  <text x="22" y="28" fill="#334155" font-size="12">Subject:&#160; Wazuh: Vulnerabilities Report - 19 June 2026 - 540 open, 64 groups</text>
+
+  <!-- header bar -->
+  <rect x="20" y="42" width="840" height="42" rx="6" fill="#b3261e"/>
+  <text x="38" y="69" fill="#ffffff" font-size="17" font-weight="bold">Vulnerabilities report &#8212; 19 June 2026</text>
+
+  <!-- white panel -->
+  <rect x="20" y="84" width="840" height="300" fill="#ffffff" stroke="#e3e8ef"/>
+  <text x="38" y="112" fill="#1f2933" font-size="14">Open (eligible/total): <tspan font-weight="bold">540</tspan>/5529 across 55 agents &#183; 64 groups (CVE + product + version).</text>
+
+  <!-- section bar -->
+  <rect x="34" y="126" width="812" height="24" fill="#b3261e"/>
+  <text x="44" y="143" fill="#ffffff" font-size="14" font-weight="bold">Open vulnerabilities (64)</text>
+
+  <!-- card 1 -->
+  <rect x="34" y="158" width="4" height="72" fill="#c0392b"/>
+  <text x="50" y="180" font-size="15"><tspan fill="#0f172a" font-weight="bold">CVE-2025-13462</tspan> <tspan fill="#64748b">affects</tspan> <tspan fill="#0f172a" font-weight="bold">python3.12 3.12.3-1ubuntu0.13</tspan></text>
+  <rect x="50" y="190" width="58" height="18" rx="3" fill="#c0392b"/>
+  <text x="58" y="203" fill="#ffffff" font-size="12" font-weight="bold">Critical</text>
+  <text x="120" y="203" fill="#475569" font-size="12">CVSS 9.8</text>
+  <text x="50" y="224" font-size="13" fill="#0f172a"><tspan font-weight="bold">Affected agents (33):</tspan> <tspan fill="#2563eb">web01, db02, app03, web04, &#8230;</tspan></text>
+  <line x1="38" y1="234" x2="846" y2="234" stroke="#e5e7eb"/>
+
+  <!-- card 2 -->
+  <rect x="34" y="240" width="4" height="72" fill="#c0392b"/>
+  <text x="50" y="262" font-size="15"><tspan fill="#0f172a" font-weight="bold">CVE-2026-4408</tspan> <tspan fill="#64748b">affects</tspan> <tspan fill="#0f172a" font-weight="bold">samba 4.17.12</tspan></text>
+  <rect x="50" y="272" width="58" height="18" rx="3" fill="#c0392b"/>
+  <text x="58" y="285" fill="#ffffff" font-size="12" font-weight="bold">Critical</text>
+  <text x="120" y="285" fill="#475569" font-size="12">CVSS 9.0</text>
+  <text x="50" y="306" font-size="13" fill="#0f172a"><tspan font-weight="bold">Affected agents (9):</tspan> <tspan fill="#2563eb">rdb01, rdb02, rdb03, &#8230;</tspan></text>
+  <line x1="38" y1="316" x2="846" y2="316" stroke="#e5e7eb"/>
+
+  <text x="38" y="346" font-size="11" fill="#94a3b8">Automated message from Wazuh (https://wazuh.example.com). Grouped by CVE + product + version.</text>
+</svg>

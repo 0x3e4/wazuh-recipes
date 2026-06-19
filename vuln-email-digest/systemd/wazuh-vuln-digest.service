@@ -1,0 +1,17 @@
+[Unit]
+Description=Wazuh Critical-vulnerability tickets (hourly new/resolved notifications)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Run as a dedicated, unprivileged service user (see README) -- NOT root.
+User=wazuh-vuln
+Group=wazuh-vuln
+RuntimeMaxSec=600
+# Secrets (WAZUH_INDEXER_PASSWORD, ...) live here, chmod 600, owned by the user.
+EnvironmentFile=/opt/wazuh-vuln-digest/wazuh-vuln-digest.env
+# --severity is an example default; drop it for all severities, or adjust to taste.
+ExecStart=/opt/wazuh-vuln-digest/venv/bin/python /opt/wazuh-vuln-digest/wazuh_vuln_digest.py \
+          --severity Critical,High --recipients security@example.com --renotify-days 30 \
+          --state-db /opt/wazuh-vuln-digest/wazuh-vuln-alert.db

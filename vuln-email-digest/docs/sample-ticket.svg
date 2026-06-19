@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="392" viewBox="0 0 880 392" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <rect width="880" height="392" fill="#e9edf2"/>
+  <text x="22" y="28" fill="#334155" font-size="12">Subject:&#160; Wazuh: Vulnerability - python3.12 - Level: 13 - 2 CVEs - 3 agents</text>
+
+  <!-- header bar (severity accent) -->
+  <rect x="20" y="42" width="840" height="42" rx="6" fill="#b3261e"/>
+  <text x="38" y="69" fill="#ffffff" font-size="17" font-weight="bold">Vulnerability ticket &#8212; python3.12</text>
+
+  <!-- white panel -->
+  <rect x="20" y="84" width="840" height="290" fill="#ffffff" stroke="#e3e8ef"/>
+  <text x="38" y="112" fill="#1f2933" font-size="14">python3.12 currently affects <tspan font-weight="bold">3</tspan> agent(s) via <tspan font-weight="bold">2</tspan> CVE(s).</text>
+
+  <!-- CVE card 1 -->
+  <rect x="34" y="124" width="4" height="98" fill="#c0392b"/>
+  <text x="50" y="146" fill="#0f172a" font-size="15" font-weight="bold">CVE-2025-13462</text>
+  <rect x="50" y="156" width="58" height="18" rx="3" fill="#c0392b"/>
+  <text x="58" y="169" fill="#ffffff" font-size="12" font-weight="bold">Critical</text>
+  <text x="120" y="169" fill="#475569" font-size="12">CVSS 9.8</text>
+  <text x="50" y="194" font-size="13" fill="#0f172a"><tspan font-weight="bold">python3.12 3.12.3-1ubuntu0.13</tspan> (3): <tspan fill="#2563eb">web01, db02, app03</tspan></text>
+  <text x="50" y="212" font-size="12" fill="#64748b">References: <tspan fill="#2563eb">https://ubuntu.com/security/CVE-2025-13462</tspan></text>
+  <line x1="38" y1="224" x2="846" y2="224" stroke="#e5e7eb"/>
+
+  <!-- CVE card 2 -->
+  <rect x="34" y="230" width="4" height="98" fill="#c0392b"/>
+  <text x="50" y="252" fill="#0f172a" font-size="15" font-weight="bold">CVE-2025-9001</text>
+  <rect x="50" y="262" width="58" height="18" rx="3" fill="#c0392b"/>
+  <text x="58" y="275" fill="#ffffff" font-size="12" font-weight="bold">Critical</text>
+  <text x="120" y="275" fill="#475569" font-size="12">CVSS 9.1</text>
+  <text x="50" y="300" font-size="13" fill="#0f172a"><tspan font-weight="bold">libpython3.12-stdlib 3.12.3-1ubuntu0.13</tspan> (2): <tspan fill="#2563eb">web01, db02</tspan></text>
+  <text x="50" y="318" font-size="12" fill="#64748b">References: <tspan fill="#2563eb">https://ubuntu.com/security/CVE-2025-9001</tspan></text>
+  <line x1="38" y1="330" x2="846" y2="330" stroke="#e5e7eb"/>
+
+  <text x="38" y="360" font-size="11" fill="#94a3b8">Automated message from Wazuh (https://wazuh.example.com). Grouped by CVE + product + version.</text>
+</svg>

@@ -1,0 +1,15 @@
+[Unit]
+Description=Wazuh Critical-vulnerability weekly report (full current-state snapshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=wazuh-vuln
+Group=wazuh-vuln
+RuntimeMaxSec=600
+EnvironmentFile=/opt/wazuh-vuln-digest/wazuh-vuln-digest.env
+# --report is stateless (reads the indexer only); it does NOT touch the dedup DB,
+# so it can use its own recipient list without affecting the ticket stream.
+ExecStart=/opt/wazuh-vuln-digest/venv/bin/python /opt/wazuh-vuln-digest/wazuh_vuln_digest.py \
+          --report --severity Critical,High --recipients security@example.com

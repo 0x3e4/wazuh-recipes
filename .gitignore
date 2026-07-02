@@ -1,9 +1,0 @@
-# Wazuh ruleset backups created by sync wrappers
-*.bak
-
-# Logs
-*.log
-
-# OS / editor cruft
-.DS_Store
-Thumbs.db

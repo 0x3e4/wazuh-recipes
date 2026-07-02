@@ -1,0 +1,19 @@
+[Unit]
+Description=Wazuh Entra/Intune admin config-change tickets (notify-once)
+After=network-online.target wazuh-indexer.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Run as a dedicated, unprivileged service user (see README) -- NOT root.
+User=wazuh-recipes
+Group=wazuh-recipes
+RuntimeMaxSec=600
+# Secrets (INDEX_PASSWORD, and MS_GRAPH_* for the Entra half) live here, chmod 600.
+EnvironmentFile=/opt/entra-config-changes-digest/entra-config-changes.env
+# >>> set the recipients and the SMTP relay here <<<
+ExecStart=/opt/entra-config-changes-digest/venv/bin/python \
+          /opt/entra-config-changes-digest/entra-config-changes_digest.py \
+          --recipients security@example.com \
+          --smtp-server smtp.example.com \
+          --state-db /opt/entra-config-changes-digest/state.db

@@ -1,0 +1,19 @@
+// Optional scripted field for the wazuh-archives-* index pattern.
+// Turns Sysmon's data.win.eventdata.queryResults (e.g. "::ffff:203.0.113.10;" or
+// "type: 5 cname;::ffff:203.0.113.20;") into just the resolved IPv4 address.
+//
+// Create it in OpenSearch Dashboards:
+//   Dashboards Management -> Index Patterns -> wazuh-archives-* -> Scripted fields -> Add
+//   Name: dns_resolved_ip   Language: painless   Type: string   (paste the body below)
+// Then edit the "DNS Activity - Top resolved IPs" panel and set its bucket field to dns_resolved_ip.
+// Uses only string ops (no painless regex, which is disabled by default). Returns the LAST
+// ::ffff: address (the A-record, skipping any CNAME prefix); null when absent.
+
+def v = doc['data.win.eventdata.queryResults'];
+if (v.size() == 0) { return null; }
+String s = v.value;
+int f = s.lastIndexOf('::ffff:');
+if (f < 0) { return s; }
+String rest = s.substring(f + 7);
+int sc = rest.indexOf(';');
+return sc >= 0 ? rest.substring(0, sc) : rest;

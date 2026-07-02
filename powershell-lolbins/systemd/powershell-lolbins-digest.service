@@ -1,0 +1,18 @@
+[Unit]
+Description=Wazuh "PowerShell / LOLBins" weekly summary email
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Run as a dedicated, unprivileged service user (see README) -- NOT root.
+# Create it once:  useradd --system --no-create-home --shell /usr/sbin/nologin wazuh-recipes
+User=wazuh-recipes
+Group=wazuh-recipes
+RuntimeMaxSec=600
+# Secrets (INDEX_PASSWORD, ...) and overrides live here, chmod 600, owned by the user.
+EnvironmentFile=/etc/powershell-lolbins-digest.env
+# Edit --recipients to taste, or set RECIPIENTS in the env file and drop the flag.
+ExecStart=/opt/powershell-lolbins-digest/venv/bin/python \
+          /opt/powershell-lolbins-digest/powershell-lolbins_digest.py \
+          --recipients security@example.com

@@ -1,0 +1,29 @@
+<!--
+  Entra ID directory audit ingestion for the entra-config-changes recipe.
+
+  This is NOT a standalone file. Add the <resource> block below INSIDE the
+  existing <ms-graph> ... </ms-graph> block in /var/ossec/etc/ossec.conf on the
+  Wazuh manager, then restart the manager:
+
+      sudo systemctl restart wazuh-manager
+
+  Editing ossec.conf and restarting the manager require root.
+
+  Azure prerequisite (application permissions on the app whose client_id the
+  ms-graph integration uses, with tenant admin consent):
+    * AuditLog.Read.All          -> lets Wazuh pull auditLogs/directoryAudits
+    * RoleManagement.Read.Directory -> lets THIS RECIPE resolve Global Admins
+                                       (used by the digest script, not the wodle)
+
+  Without this block the recipe still works for Intune (deviceManagement)
+  audit events, which are already collected — this only adds the Entra ID
+  directory audit half (role assignments, Conditional Access, app registrations,
+  user/group changes, etc.).
+
+  The directoryAudit events arrive under rule group `ms-graph` and are matched
+  by the script via data.ms-graph.targetResources[].modifiedProperties[].
+-->
+<resource>
+  <name>auditLogs</name>
+  <relationship>directoryAudits</relationship>
+</resource>

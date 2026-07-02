@@ -1,0 +1,70 @@
+<!--
+  DNS threat detection (Sysmon Event 22 / DNS Query)
+  Chains off built-in rule 61650 (Sysmon Event 22, level 0) so that ONLY suspicious
+  queries alert - normal DNS stays level 0 (archive only). All rules carry the
+  group "dns_threat" for dashboard / digest filtering.
+  ID range: 100700-100719.
+
+  Prerequisites:
+    - Sysmon installed on the Windows endpoints with DNS query logging enabled
+      (Event ID 22), shipped to Wazuh (the built-in 0595-win-sysmon_rules fire 61650).
+    - For rule 100700, populate the CDB list etc/lists/malicious-ioc/malicious-domains
+      (one "domain:" per line) and reference it under <ruleset> in ossec.conf.
+-->
+
+<group name="windows,sysmon,sysmon_event_22,dns_threat,">
+
+  <!-- 100700: queryName present on the malicious-domains denylist (exact FQDN match) -->
+  <rule id="100700" level="12">
+    <if_sid>61650</if_sid>
+    <list field="win.eventdata.queryName" lookup="match_key">etc/lists/malicious-ioc/malicious-domains</list>
+    <description>DNS: query to KNOWN-MALICIOUS domain $(win.eventdata.queryName) by $(win.eventdata.image)</description>
+    <mitre>
+      <id>T1071.004</id>
+    </mitre>
+    <group>dns_denylist,</group>
+  </rule>
+
+  <!-- 100701: query to a suspicious / abuse-prone TLD -->
+  <rule id="100701" level="10">
+    <if_sid>61650</if_sid>
+    <field name="win.eventdata.queryName" type="pcre2">(?i)\.(top|xyz|tk|ml|ga|cf|gq|click|monster|quest|cfd|sbs|zip|mov|lol|work|buzz)\.?$</field>
+    <description>DNS: query to suspicious TLD: $(win.eventdata.queryName) by $(win.eventdata.image)</description>
+    <mitre>
+      <id>T1071.004</id>
+    </mitre>
+    <group>dns_sus_tld,</group>
+  </rule>
+
+  <!-- 100711: suppress your OWN domain(s) that legitimately use a flagged TLD (false positive under 100701).
+       EDIT the regex to match your domain(s), e.g. (^|\.)example\.lol\.?$  -->
+  <rule id="100711" level="0">
+    <if_sid>100701</if_sid>
+    <field name="win.eventdata.queryName" type="pcre2">(?i)(^|\.)yourdomain\.example\.?$</field>
+    <description>DNS: suppressed - own domain</description>
+    <group>dns_suppressed,</group>
+  </rule>
+
+  <!-- 100702: query to a dynamic-DNS / tunneling-as-a-service provider -->
+  <rule id="100702" level="10">
+    <if_sid>61650</if_sid>
+    <field name="win.eventdata.queryName" type="pcre2">(?i)(duckdns\.org|no-ip\.|noip\.com|ddns\.net|dyndns|ngrok|nip\.io|sslip\.io|workers\.dev|trycloudflare|hopto\.org|zapto\.org|serveo|loca\.lt|afraid\.org|dynu\.com)</field>
+    <description>DNS: query to dynamic-DNS / tunneling service: $(win.eventdata.queryName) by $(win.eventdata.image)</description>
+    <mitre>
+      <id>T1568.002</id>
+    </mitre>
+    <group>dns_dynamic,</group>
+  </rule>
+
+  <!-- 100703: possible DNS tunneling - abnormally long single label (>=50 chars) -->
+  <rule id="100703" level="10">
+    <if_sid>61650</if_sid>
+    <field name="win.eventdata.queryName" type="pcre2">(?i)[a-z0-9\-]{50,}\.</field>
+    <description>DNS: possible tunneling - very long label in $(win.eventdata.queryName) by $(win.eventdata.image)</description>
+    <mitre>
+      <id>T1048.003</id>
+    </mitre>
+    <group>dns_tunneling,</group>
+  </rule>
+
+</group>

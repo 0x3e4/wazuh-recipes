@@ -74,6 +74,26 @@ dashboard/
 - **For the Entra half only:** the `auditLogs/directoryAudits` resource enabled (below) and
   a Graph app with `AuditLog.Read.All` + `RoleManagement.Read.Directory` (admin consent).
 
+## Microsoft Graph app permissions
+
+The `ms-graph` integration and this recipe share one Entra app registration. Grant these as
+**Application** permissions with **admin consent**. Only the last two are needed by *this
+recipe*; the rest belong to whichever `ms-graph` feeds you actually pull.
+
+| Permission | Needed by | For which data |
+|------------|-----------|----------------|
+| `DeviceManagementApps.Read.All` | ms-graph integration | Intune `deviceManagement/auditEvents` + `detectedApps` |
+| `DeviceManagementManagedDevices.Read.All` | ms-graph integration | Intune `deviceManagement/managedDevices` |
+| `SecurityAlert.Read.All` | ms-graph integration | `security/alerts_v2` |
+| `SecurityIncident.Read.All` | ms-graph integration | `security/incidents` |
+| `AuditLog.Read.All` | ms-graph integration | **Entra `auditLogs/directoryAudits`** (required for the Entra half) |
+| `RoleManagement.Read.Directory` | **this recipe** | Global Administrator role-membership lookup (Entra global-admin gate) |
+
+The **Intune half needs no Graph app permission for the recipe itself** — it reads Intune audit
+events from the Wazuh Indexer and gates on `actor.userPermissions`. Graph is called only for the
+Entra global-admin lookup (`RoleManagement.Read.Directory`), and `AuditLog.Read.All` is what lets
+the integration ingest the Entra directory-audit feed in the first place.
+
 ## Installation
 
 The script only **reads** the indexer, **writes** a small SQLite file, and **sends** mail —

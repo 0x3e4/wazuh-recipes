@@ -16,10 +16,14 @@ Config (env / EnvironmentFile): MS_GRAPH_TENANT_ID / MS_GRAPH_CLIENT_ID / MS_GRA
 (required), RECIPIENTS, SMTP_SERVER, SMTP_PORT, MAIL_FROM, DASHBOARD_URL, STATE_DB,
 SUPPRESS_NOISE, GLOBAL_ADMIN_ROLE_TEMPLATE_IDS, GRAPH_ROLE_CACHE_HOURS. Standard library only.
 """
-import os, sys, json, html, smtplib, sqlite3, hashlib, argparse
+import os, sys, re, json, html, smtplib, sqlite3, hashlib, argparse
 import urllib.request, urllib.parse, urllib.error
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 TOPIC = "Entra / Intune admin config change"
 GRAPH = "https://graph.microsoft.com/v1.0"
@@ -47,7 +51,12 @@ STATE_DB       = os.environ.get("STATE_DB", "/opt/entra-config-changes-digest/gr
 SUPPRESS_NOISE = os.environ.get("SUPPRESS_NOISE", "1").strip().lower() in ("1", "true", "yes", "on")
 # Property displayNames to drop from tickets (audit noise). Comma-separated, case-insensitive.
 IGNORE_PROPERTIES = {x.strip().lower() for x in os.environ.get(
-    "IGNORE_PROPERTIES", "DeviceManagementAPIVersion").split(",") if x.strip()}
+    "IGNORE_PROPERTIES", "DeviceManagementAPIVersion,Included Updated Properties").split(",") if x.strip()}
+DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "Europe/Vienna")  # "When" is shown in this zone
+# Optional: append each global-admin change as native ms-graph JSON to this file so a
+# Wazuh <localfile> ingests it (json-msgraph decoder) -> shows in the prebuilt Microsoft
+# Graph API dashboard and fires the entra_admin_change rules. Empty = feed disabled.
+FEED_FILE = os.environ.get("FEED_FILE", "")
 _ACCENT = "#b3261e"
 _MAX_VAL_LEN = 300
 
@@ -189,6 +198,7 @@ def classify_event(hit):
         "correlation_id": str(mg.get("correlationId") or ""),
         "category": str(mg.get("category") or ""),
         "when": str(mg.get("activityDateTime") or _g(src, "timestamp", default="") or ""),
+        "_raw": mg,   # original Graph ms-graph object, for the Wazuh feed
     }
     if mg.get("resources") is not None:
         actor = mg.get("actor") or {}
@@ -255,6 +265,54 @@ def _disp_val(v):
         return "(none)"
     return n[:_MAX_VAL_LEN] + " …" if len(n) > _MAX_VAL_LEN else n
 
+# Nested-JSON leaf paths that always change on a save -> hidden under SUPPRESS_NOISE.
+_JSON_NOISE_LEAVES = {"modifieddatetime"}
+_MAX_JSON_DIFFS = 40
+
+def _deep_parse(v):
+    """Best-effort decode of a possibly JSON-encoded value. Entra often double-encodes
+    (e.g. a JSON array whose single element is a JSON string). Unwrap a few layers."""
+    for _ in range(5):
+        if isinstance(v, str):
+            s = v.strip()
+            if s[:1] in ("[", "{"):
+                try:
+                    v = json.loads(s)
+                    continue
+                except Exception:
+                    return v
+            return v
+        if isinstance(v, list) and len(v) == 1:
+            v = v[0]
+            continue
+        return v
+    return v
+
+def _flatten(obj, prefix=""):
+    out = {}
+    if isinstance(obj, dict):
+        for k, val in obj.items():
+            out.update(_flatten(val, f"{prefix}.{k}" if prefix else str(k)))
+    elif isinstance(obj, list):
+        for i, val in enumerate(obj):
+            out.update(_flatten(val, f"{prefix}[{i}]"))
+    else:
+        out[prefix or "value"] = obj
+    return out
+
+def _json_leaf_diff(old_raw, new_raw):
+    """If old/new decode to JSON structures, return [(path, old, new)] for changed
+    leaves; else None (caller falls back to the raw string)."""
+    o, n = _deep_parse(old_raw), _deep_parse(new_raw)
+    if not (isinstance(o, (dict, list)) or isinstance(n, (dict, list))):
+        return None
+    fo, fn = _flatten(o), _flatten(n)
+    diffs = []
+    for k in sorted(set(fo) | set(fn)):
+        if fo.get(k) != fn.get(k):
+            diffs.append((k, fo.get(k), fn.get(k)))
+    return diffs
+
 def real_changes(modified_properties):
     out = []
     for mp in modified_properties:
@@ -263,13 +321,29 @@ def real_changes(modified_properties):
         name = str(mp.get("displayName") or "")
         if name.strip().lower() in IGNORE_PROPERTIES:
             continue
-        old_n, new_n = _norm_val(mp.get("oldValue")), _norm_val(mp.get("newValue"))
+        old_raw, new_raw = mp.get("oldValue"), mp.get("newValue")
+        old_n, new_n = _norm_val(old_raw), _norm_val(new_raw)
         if old_n == new_n:
             continue
         if SUPPRESS_NOISE and (_is_placeholder(old_n) or _is_placeholder(new_n)):
             continue
+        # If the value is embedded JSON, show only the nested fields that changed.
+        jdiff = _json_leaf_diff(old_raw, new_raw)
+        if jdiff is not None:
+            emitted = 0
+            for path, a, b in jdiff:
+                leaf = path.split(".")[-1].split("[")[0].lower()
+                if SUPPRESS_NOISE and leaf in _JSON_NOISE_LEAVES:
+                    continue
+                if emitted >= _MAX_JSON_DIFFS:
+                    out.append({"name": f"{name} › …", "old": "",
+                                "new": f"(+{len(jdiff) - emitted} more changed field(s))"})
+                    break
+                out.append({"name": f"{name} › {path}", "old": _disp_val(a), "new": _disp_val(b)})
+                emitted += 1
+            continue   # JSON handled (even if all-noise -> nothing emitted)
         out.append({"name": name,
-                    "old": _disp_val(mp.get("oldValue")), "new": _disp_val(mp.get("newValue"))})
+                    "old": _disp_val(old_raw), "new": _disp_val(new_raw)})
     return out
 
 def event_key(rec):
@@ -324,7 +398,21 @@ def _esc(s):
 _FONT = "font-family:'Segoe UI',Segoe,Tahoma,Arial,sans-serif;"
 
 def _fmt_ts(ts):
-    return "" if not ts else str(ts).replace("T", " ")[:19]
+    """Render a Graph UTC activityDateTime in DISPLAY_TZ (default Europe/Vienna),
+    e.g. '2026-07-02 12:56:38 CEST'. Falls back to the raw value on parse error."""
+    if not ts:
+        return ""
+    s = str(ts).strip()
+    try:
+        s2 = re.sub(r"(\.\d{6})\d+", r"\1", s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(s2)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if ZoneInfo is not None:
+            dt = dt.astimezone(ZoneInfo(DISPLAY_TZ))
+        return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+    except Exception:
+        return s.replace("T", " ")[:19]
 
 def _kv_table_html(headers, rows):
     th = "".join(f'<th style="{_FONT}text-align:left;padding:6px 10px;background:#f1f5f9;'
@@ -366,6 +454,13 @@ def _html_page(title_html, intro_html, body_html, accent=_ACCENT):
 
 def _short_source(rec):
     return "Entra" if rec["source"] == "entra" else "Intune"
+
+_ACTOR_TYPE = {"itpro": "IT admin (portal)", "user": "User", "application": "Application",
+               "serviceprincipal": "Service principal", "system": "System",
+               "systemaccount": "System account", "unknown": "Unknown"}
+
+def _actor_type_label(t):
+    return _ACTOR_TYPE.get(str(t or "").strip().lower(), t)
 
 def _res_summary(rec):
     parts = []
@@ -457,6 +552,32 @@ def build_ticket_text(rec, is_test=False):
             L.append("    (Intune recorded only the resulting values; no previous values)")
     return "\n".join(L)
 
+def feed_events(path, records):
+    """Append each record's native ms-graph event to a JSON logfile for Wazuh ingestion.
+    Tagged with ms-graph.admin_change=true so a custom rule can elevate it and it shows
+    in the prebuilt Microsoft Graph API dashboard (rule.groups:ms-graph, data.ms-graph.*)."""
+    if not path:
+        return 0
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            for rec in records:
+                item = dict(rec.get("_raw") or {})
+                # directoryAudits use activityDisplayName; give the dashboard a displayName
+                item.setdefault("displayName", item.get("activityDisplayName")
+                                or item.get("activityType") or rec.get("action") or "")
+                item["admin_change"] = "true"
+                item["is_global_admin"] = "true"
+                item["admin_actor"] = rec.get("actor_upn") or rec.get("actor_id") or ""
+                item["admin_source"] = rec.get("source") or ""
+                # compact separators: the json-msgraph decoder prematches the literal
+                # '"integration":"ms-graph"' (no spaces).
+                fh.write(json.dumps({"integration": "ms-graph", "ms-graph": item},
+                                    ensure_ascii=False, separators=(",", ":")) + "\n")
+        return len(records)
+    except OSError as e:
+        print(f"[feed] WARNING: cannot write {path}: {e}")
+        return 0
+
 def send_mail(recipients, subject, text_body, html_body=None, smtp_server=SMTP_SERVER, smtp_port=SMTP_PORT):
     em = EmailMessage()
     em["From"] = MAIL_FROM
@@ -536,6 +657,10 @@ def run(args):
             for r in new:
                 print("  NEW:", ticket_subject(r))
             return
+        if new and args.feed_file:
+            fed = feed_events(args.feed_file, new)
+            if fed:
+                print(f"[feed] wrote {fed} event(s) to {args.feed_file}")
         if not new:
             print("[notify] nothing new; no email."); return
         recips = _recipients(args)
@@ -562,6 +687,9 @@ def main():
     ap.add_argument("--smtp-port", type=int, default=SMTP_PORT)
     ap.add_argument("--state-db", default=STATE_DB)
     ap.add_argument("--dashboard-url", default=DASHBOARD_URL)
+    ap.add_argument("--feed-file", default=FEED_FILE,
+                    help="append fed ms-graph events to this JSON logfile for a Wazuh <localfile> "
+                         "(env FEED_FILE; empty = disabled)")
     ap.add_argument("--lookback-hours", type=float, default=0.0,
                     help="on first run per feed, start this many hours in the past (default 0 = forward-only)")
     ap.add_argument("--seed", action="store_true", help="set bookmarks to now (no email), then exit")

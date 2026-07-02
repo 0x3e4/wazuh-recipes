@@ -1,0 +1,24 @@
+<!--
+  Make the poller's ms-graph feed visible in Wazuh (prebuilt "Microsoft Graph API"
+  dashboard + the entra_admin_change rules).
+
+  1. Run the poller with a feed file (poller flag: feed-file, or FEED_FILE env), pointing
+     at /var/ossec/logs/entra-config-changes.json. The poller runs as root, appends there.
+
+  2. Add this block inside <ossec_config> in /var/ossec/etc/ossec.conf, then
+       sudo systemctl restart wazuh-manager
+
+  The file is JSON (one event per line, {"integration":"ms-graph","ms-graph":{...}});
+  the built-in json-msgraph decoder handles it, so events land under data.ms-graph.*
+  with rule.groups:ms-graph and fire ruleset/rules/entra_admin_change_rules.xml.
+
+  Note: the poller (root) creates the file; ensure the wazuh user can read it, e.g.
+    sudo touch /var/ossec/logs/entra-config-changes.json
+    sudo chown root:wazuh /var/ossec/logs/entra-config-changes.json
+    sudo chmod 0640 /var/ossec/logs/entra-config-changes.json
+  and add it to your logrotate for /var/ossec/logs if desired.
+-->
+<localfile>
+  <log_format>json</log_format>
+  <location>/var/ossec/logs/entra-config-changes.json</location>
+</localfile>

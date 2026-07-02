@@ -1,0 +1,46 @@
+<!--
+  Entra / Intune admin config-change alerts.
+
+  The entra-config-changes_graph.py poller (run with the feed-file flag / FEED_FILE env) appends
+  each GLOBAL-ADMIN configuration change as a native ms-graph JSON event tagged with
+  ms-graph.admin_change="true". A Wazuh <localfile> ingests that file (see
+  ossec/entra-config-changes.localfile.snippet.xml); the built-in json-msgraph decoder
+  puts it under data.ms-graph.* and rule 99500 (ms-graph root) matches, so these fire
+  the rules below AND appear in Wazuh's prebuilt "Microsoft Graph API" dashboard
+  (which filters rule.groups:ms-graph).
+
+  Deploy: copy to /var/ossec/etc/rules/, then
+    sudo chown root:wazuh /var/ossec/etc/rules/entra_admin_change_rules.xml
+    sudo chmod 0660 /var/ossec/etc/rules/entra_admin_change_rules.xml
+    sudo systemctl restart wazuh-manager
+  Validate first with:  /var/ossec/bin/wazuh-logtest
+  Custom rule IDs 100800-100802 — change them if they clash in your environment.
+-->
+<group name="ms-graph,entra_admin_change,">
+
+  <!-- Base: any global-admin config change fed by the poller. -->
+  <rule id="100800" level="12">
+    <if_sid>99500</if_sid>
+    <field name="ms-graph.admin_change">true</field>
+    <description>Entra/Intune: configuration change by a global administrator: $(ms-graph.displayName)</description>
+    <options>no_full_log</options>
+    <group>entra_admin_change,configuration_change,</group>
+  </rule>
+
+  <!-- Entra ID directory change (roles, Conditional Access, app registrations, users, groups). -->
+  <rule id="100801" level="12">
+    <if_sid>100800</if_sid>
+    <field name="ms-graph.admin_source">entra</field>
+    <description>Entra ID: directory config change by global admin: $(ms-graph.displayName) [$(ms-graph.admin_actor)]</description>
+    <group>entra_admin_change,gdpr_IV_35.7.d,</group>
+  </rule>
+
+  <!-- Intune device/compliance/app configuration change. -->
+  <rule id="100802" level="12">
+    <if_sid>100800</if_sid>
+    <field name="ms-graph.admin_source">intune</field>
+    <description>Intune: device config change by global admin: $(ms-graph.displayName) [$(ms-graph.admin_actor)]</description>
+    <group>entra_admin_change,</group>
+  </rule>
+
+</group>

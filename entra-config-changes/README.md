@@ -52,12 +52,16 @@ If the Graph lookup is unavailable and there is no cache, Entra events are **ski
 
 ```
 bin/
-  entra-config-changes_digest.py          # query → classify → diff → de-dup → email
+  entra-config-changes_digest.py           # indexer-based collector (query → classify → diff → email)
+  entra-config-changes_graph.py            # direct-Graph poller (recommended for the audit feeds)
 systemd/
   entra-config-changes-digest.service/.timer   # 15-minute notify-once job
   entra-config-changes-digest.env.example       # secrets + overrides (copy to a 0600 env file)
+ruleset/
+  rules/entra_admin_change_rules.xml       # level-12 alerts + ms-graph group (prebuilt dashboard)
 ossec/
-  ms-graph-directoryaudits.snippet.xml     # <resource> to add for the Entra ID half
+  ms-graph-directoryaudits.snippet.xml     # <resource> to add for the ms-graph wodle (Entra half)
+  entra-config-changes.localfile.snippet.xml   # <localfile> to ingest the poller's feed
 dashboard/
   entra-config-changes.ndjson              # importable overview dashboard (optional)
 ```
@@ -159,6 +163,31 @@ Import**. It targets the `wazuh-alerts-*` index pattern and rule id `99652`.
 2. **Azure**: grant the Graph app **application** permissions `AuditLog.Read.All` (ingestion)
    and `RoleManagement.Read.Directory` (the recipe's Global-Admin lookup), with admin consent.
 3. Put that app's tenant/client/secret in `MS_GRAPH_*` in the env file.
+
+## Direct-Graph poller + prebuilt dashboard (recommended for the audit feeds)
+
+The Wazuh `ms-graph` wodle currently can't deliver `deviceManagement/auditEvents` or
+`auditLogs/directoryAudits`: it filters those on `createdDateTime`, but they use
+`activityDateTime` → HTTP 400, nothing collected ([wazuh/wazuh#31451](https://github.com/wazuh/wazuh/issues/31451),
+[#27606](https://github.com/wazuh/wazuh/issues/27606)); the `detectedApps`/`managedDevices`
+enumeration also triggers Graph 429 throttling. So this recipe ships a **direct poller**,
+`bin/entra-config-changes_graph.py`, which reads both feeds from Graph itself (correct
+`activityDateTime` filter, forward-only bookmark) and emails the tickets.
+
+To also see them in Wazuh's **prebuilt "Microsoft Graph API" dashboard** and as alerts,
+have the poller feed the events back into Wazuh in native ms-graph shape:
+
+1. Run the poller with a feed file (`--feed-file /var/ossec/logs/entra-config-changes.json`
+   or `FEED_FILE=`). It appends each global-admin change as
+   `{"integration":"ms-graph","ms-graph":{…,"admin_change":"true"}}`.
+2. Add `ossec/entra-config-changes.localfile.snippet.xml` to `ossec.conf` (a `<localfile>`
+   reading that JSON file), so the built-in `json-msgraph` decoder indexes it under
+   `data.ms-graph.*` with `rule.groups:ms-graph` → it appears in the prebuilt dashboard.
+3. Install `ruleset/rules/entra_admin_change_rules.xml` (custom rules `100800-100802`,
+   level 12, group `entra_admin_change`) to elevate/label those events, then restart the
+   manager. Validate with `/var/ossec/bin/wazuh-logtest`.
+
+Email stays on the poller; the feed only drives the dashboard/alerts (no double-notify).
 
 ## Usage
 

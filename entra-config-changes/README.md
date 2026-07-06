@@ -189,6 +189,29 @@ have the poller feed the events back into Wazuh in native ms-graph shape:
 
 Email stays on the poller; the feed only drives the dashboard/alerts (no double-notify).
 
+### Readable, low-noise tickets
+
+The poller keeps the inbox and each ticket manageable:
+
+- **Grouped per (admin + object) per run** — one email per changed object even when a single
+  admin action emits several audit events (app registration → Add application + Add service
+  principal + Consent + Update application + Add owner). `--no-group` / `GROUP_TICKETS=0` to disable.
+- **GUIDs → names** — directory-object IDs (`ServicePrincipal.ObjectID`, users, groups, apps,
+  roles), app IDs (`ResourceAppId`) **and OAuth permission IDs** (`EntitlementId`, `AppRole.Id`,
+  consent scopes) are resolved to display / permission names — e.g. `Directory.Read.All` — via
+  Graph and cached (`Name (1234abcd…)`). Needs `Directory.Read.All`; without it, GUIDs show raw.
+- **No index churn** — embedded-JSON lists (e.g. `RequiredResourceAccess`) are diffed by a
+  stable id (`EntitlementId`/`ResourceAppId`), so a reordered permission list shows only what
+  was actually added/removed, not every array index.
+- **Noise hidden** — always-changing metadata (`ModifiedDateTime`, `CreatedDateTime`,
+  `LastModifiedDateTime`) and verbose fields (`TargetId.ServicePrincipalNames`,
+  `Included Updated Properties`) are dropped; tunable via `NOISE_LEAVES` / `IGNORE_PROPERTIES`.
+- **`When` in your timezone** — `DISPLAY_TZ` (default `Europe/Vienna`, e.g. `12:56:38 CEST`).
+
+Permission-name resolution uses each resource service principal's published `appRoles` /
+`oauth2PermissionScopes` (keyed off the `ResourceAppId` in the change path, plus a well-known
+resource map for role-assignment events); ids from resources the app can't read stay as GUIDs.
+
 ## Usage
 
 ```bash
@@ -219,8 +242,17 @@ Near the top of `bin/entra-config-changes_digest.py`, all overridable by env:
 - **`GLOBAL_ADMIN_ROLE_TEMPLATE_IDS`** — role template ids treated as "global admin" for the
   Entra lookup (default: Global Administrator `62e90394-…`; add e.g. Privileged Role Admin).
 - **`GRAPH_ROLE_CACHE_HOURS`** — how long the Global-Admin member set is cached (default 6).
-- **`SUPPRESS_NOISE`** — drop opaque `.NET` placeholder property values (default on).
-- **`LOOKBACK_HOURS`**, **`INDEX_*`**, **`SMTP_*`**, **`MAIL_FROM`**, **`DASHBOARD_URL`** — see the env example.
+- **`SUPPRESS_NOISE`** — drop opaque `.NET` placeholder + `NOISE_LEAVES` metadata values (default on).
+- **`GROUP_TICKETS`** — group changes per (admin + object) into one email (default on; `--no-group` per run).
+- **`RESOLVE_GUIDS`** / **`DIR_OBJECT_CACHE_HOURS`** — resolve directory/app GUIDs to names via
+  Graph and cache them (default on / 24h; needs `Directory.Read.All`).
+- **`NOISE_LEAVES`** / **`IGNORE_PROPERTIES`** — property leaves / full names to hide (see defaults in the script).
+- **`DISPLAY_TZ`** — timezone for the `When` field (default `Europe/Vienna`).
+- **`FEED_FILE`** — write ms-graph events for the prebuilt dashboard (see above).
+- **`LOOKBACK_HOURS`**, **`SMTP_*`**, **`MAIL_FROM`**, **`DASHBOARD_URL`** — see the env example.
+
+> The poller (`entra-config-changes_graph.py`) reads these from the environment;
+> `Directory.Read.All` (application, admin consent) is what enables GUID→name resolution.
 
 ## Verifying
 

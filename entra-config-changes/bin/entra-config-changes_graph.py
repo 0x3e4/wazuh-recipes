@@ -49,10 +49,17 @@ RECIPIENTS     = os.environ.get("RECIPIENTS", "")
 DASHBOARD_URL  = os.environ.get("DASHBOARD_URL", "https://wazuh.example.com")
 STATE_DB       = os.environ.get("STATE_DB", "/opt/entra-config-changes-digest/graph-state.db")
 SUPPRESS_NOISE = os.environ.get("SUPPRESS_NOISE", "1").strip().lower() in ("1", "true", "yes", "on")
-# Property displayNames to drop from tickets (audit noise). Comma-separated, case-insensitive.
+# Full property displayNames to drop entirely (audit noise). Comma-separated, case-insensitive.
 IGNORE_PROPERTIES = {x.strip().lower() for x in os.environ.get(
-    "IGNORE_PROPERTIES", "DeviceManagementAPIVersion,Included Updated Properties").split(",") if x.strip()}
+    "IGNORE_PROPERTIES",
+    "DeviceManagementAPIVersion,Included Updated Properties,TargetId.ServicePrincipalNames").split(",") if x.strip()}
+# Leaf names (last dotted/bracketed segment) of always-changing metadata -> dropped under SUPPRESS_NOISE.
+NOISE_LEAVES = {x.strip().lower() for x in os.environ.get(
+    "NOISE_LEAVES", "modifieddatetime,createddatetime,lastmodifieddatetime").split(",") if x.strip()}
 DISPLAY_TZ = os.environ.get("DISPLAY_TZ", "Europe/Vienna")  # "When" is shown in this zone
+RESOLVE_GUIDS = os.environ.get("RESOLVE_GUIDS", "1").strip().lower() in ("1", "true", "yes", "on")
+DIR_OBJECT_CACHE_HOURS = int(os.environ.get("DIR_OBJECT_CACHE_HOURS", "24"))
+GROUP_TICKETS = os.environ.get("GROUP_TICKETS", "1").strip().lower() in ("1", "true", "yes", "on")
 # Optional: append each global-admin change as native ms-graph JSON to this file so a
 # Wazuh <localfile> ingests it (json-msgraph decoder) -> shows in the prebuilt Microsoft
 # Graph API dashboard and fires the entra_admin_change rules. Empty = feed disabled.
@@ -86,6 +93,174 @@ def _graph_get(url, token):
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.load(r)
+
+def _graph_post(url, body, token):
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+_GUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_WELL_KNOWN_APPIDS = {
+    "00000003-0000-0000-c000-000000000000": "Microsoft Graph",
+    "00000002-0000-0000-c000-000000000000": "Azure Active Directory Graph",
+    "00000002-0000-0ff1-ce00-000000000000": "Office 365 Exchange Online",
+    "00000003-0000-0ff1-ce00-000000000000": "Office 365 SharePoint Online",
+    "797f4846-ba00-4fd7-ba43-dac1f8f63013": "Windows Azure Service Management API",
+}
+_WK_BY_NAME = {v.lower(): k for k, v in _WELL_KNOWN_APPIDS.items()}
+
+def _dir_cache_get(conn, keys):
+    if not keys:
+        return {}
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=DIR_OBJECT_CACHE_HOURS)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    q = "SELECT object_id, display FROM dir_objects WHERE cached_at>=? AND object_id IN (%s)" % ",".join("?" * len(keys))
+    return {r[0]: r[1] for r in conn.execute(q, [cutoff, *keys])}
+
+def _dir_cache_put(conn, mapping):
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    conn.executemany("INSERT OR REPLACE INTO dir_objects(object_id, display, cached_at) VALUES(?,?,?)",
+                     [(k, v, now) for k, v in mapping.items()])
+
+def resolve_dir_objects(conn, token, ids):
+    """Resolve directory OBJECT ids -> display name via POST /directoryObjects/getByIds. Cached."""
+    ids = [i for i in set(ids) if _GUID_RE.fullmatch(i or "")]
+    if not ids:
+        return {}
+    resolved = _dir_cache_get(conn, ids)
+    missing = [i for i in ids if i not in resolved]
+    for s in range(0, len(missing), 900):
+        batch = missing[s:s + 900]
+        try:
+            data = _graph_post("https://graph.microsoft.com/v1.0/directoryObjects/getByIds", {"ids": batch}, token)
+        except Exception as e:
+            print(f"[resolve] getByIds failed ({e}); leaving object GUIDs raw"); break
+        found = {}
+        for o in data.get("value", []):
+            disp = o.get("displayName") or o.get("appDisplayName") or o.get("userPrincipalName")
+            if o.get("id") and disp:
+                found[o["id"]] = disp
+        if found:
+            _dir_cache_put(conn, found)
+        resolved.update(found)
+    return resolved
+
+def resolve_app_ids(conn, token, appids):
+    """Resolve application (client) IDs -> service-principal display name. Cached ('appid:' keys)."""
+    out = {}
+    for a in {x for x in appids if _GUID_RE.fullmatch(x or "")}:
+        if a in _WELL_KNOWN_APPIDS:
+            out[a] = _WELL_KNOWN_APPIDS[a]; continue
+        c = _dir_cache_get(conn, ["appid:" + a])
+        if "appid:" + a in c:
+            out[a] = c["appid:" + a]; continue
+        try:
+            disp = _graph_get(f"https://graph.microsoft.com/v1.0/servicePrincipals(appId='{a}')?$select=displayName",
+                              token).get("displayName")
+        except Exception:
+            disp = None
+        if disp:
+            out[a] = disp; _dir_cache_put(conn, {"appid:" + a: disp})
+    return out
+
+def annotate_guids(conn, token, kept):
+    """Replace directory-object / app-ID GUIDs in change values, actor and resource with
+    'Name (12345678…)'. Needs Directory.Read.All; on error it leaves GUIDs untouched."""
+    if not (RESOLVE_GUIDS and kept):
+        return
+    obj_ids, app_ids = set(), set()
+    def scan(v, into):
+        for m in _GUID_RE.findall(str(v or "")):
+            into.add(m)
+    for rec in kept:
+        scan(rec.get("actor_id"), obj_ids)
+        for r in rec["resources"]:
+            scan(r.get("display"), obj_ids)
+            for c in r["changes"]:
+                scan(c["old"], obj_ids); scan(c["new"], obj_ids)
+                if c["name"].lower().endswith("resourceappid"):
+                    scan(c["old"], app_ids); scan(c["new"], app_ids)
+    try:
+        names = resolve_dir_objects(conn, token, obj_ids)
+        appnames = resolve_app_ids(conn, token, app_ids)
+        conn.commit()
+    except Exception as e:
+        print(f"[resolve] disabled this run ({e})"); return
+    if not (names or appnames):
+        return
+    def repl(val):
+        return _GUID_RE.sub(lambda m: (f"{names.get(m.group(0)) or appnames.get(m.group(0))} "
+                                       f"({m.group(0)[:8]}…)") if (names.get(m.group(0)) or appnames.get(m.group(0)))
+                            else m.group(0), str(val if val is not None else ""))
+    for rec in kept:
+        if rec.get("actor_id") in names and not rec.get("actor_upn"):
+            rec["actor_upn"] = names[rec["actor_id"]]
+        for r in rec["resources"]:
+            if r.get("display"):
+                r["display"] = repl(r["display"])
+            for c in r["changes"]:
+                c["old"] = repl(c["old"]); c["new"] = repl(c["new"])
+
+def resolve_app_perms(conn, token, appid):
+    """Map a resource SP's permission ids -> names (appRoles + oauth2PermissionScopes). Cached."""
+    if not _GUID_RE.fullmatch(appid or ""):
+        return {}
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=DIR_OBJECT_CACHE_HOURS)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    cached = {r[0]: r[1] for r in conn.execute(
+        "SELECT perm_id, name FROM app_perms WHERE resource=? AND cached_at>=?", (appid, cutoff))}
+    if cached:
+        return cached
+    try:
+        data = _graph_get("https://graph.microsoft.com/v1.0/servicePrincipals(appId='%s')"
+                          "?$select=appRoles,oauth2PermissionScopes" % appid, token)
+    except Exception as e:
+        print(f"[resolve] appRoles/scopes for {appid[:8]}… failed ({e})"); return {}
+    m = {}
+    for r in data.get("appRoles", []) or []:
+        if r.get("id"):
+            m[r["id"]] = (r.get("value") or r.get("displayName") or "app role")
+    for s in data.get("oauth2PermissionScopes", []) or []:
+        if s.get("id"):
+            m[s["id"]] = (s.get("value") or s.get("adminConsentDisplayName") or "scope")
+    if m:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        conn.executemany("INSERT OR REPLACE INTO app_perms(resource, perm_id, name, cached_at) VALUES(?,?,?,?)",
+                         [(appid, k, v, now) for k, v in m.items()])
+    return m
+
+def annotate_perms(conn, token, kept):
+    """Resolve OAuth permission ids (EntitlementId, AppRole.Id, consent scope ids) to
+    permission names via the resource SP that publishes them. Needs Directory.Read.All."""
+    if not (RESOLVE_GUIDS and kept):
+        return
+    appids = set()
+    for rec in kept:
+        for r in rec["resources"]:
+            wk = _WK_BY_NAME.get(str(r.get("display", "")).split(" (")[0].strip().lower())
+            if wk:
+                appids.add(wk)
+            for c in r["changes"]:
+                appids.update(re.findall(r"ResourceAppId=([0-9a-fA-F-]{36})", c["name"]))
+                if c["name"].strip().lower().endswith("appid"):
+                    appids.update(_GUID_RE.findall(str(c["old"] or "") + " " + str(c["new"] or "")))
+    perm = {}
+    for a in appids:
+        try:
+            perm.update({k.lower(): v for k, v in resolve_app_perms(conn, token, a).items()})
+        except Exception:
+            pass
+    conn.commit()
+    if not perm:
+        return
+    def repl(val):
+        return _GUID_RE.sub(lambda m: (f"{perm[m.group(0).lower()]} ({m.group(0)[:8]}…)")
+                            if m.group(0).lower() in perm else m.group(0),
+                            str(val if val is not None else ""))
+    for rec in kept:
+        for r in rec["resources"]:
+            for c in r["changes"]:
+                c["old"] = repl(c["old"]); c["new"] = repl(c["new"])
 
 def get_global_admin_ids(conn, token):
     """Cached set of Global Administrator member object-ids. None if unavailable."""
@@ -265,9 +440,18 @@ def _disp_val(v):
         return "(none)"
     return n[:_MAX_VAL_LEN] + " …" if len(n) > _MAX_VAL_LEN else n
 
-# Nested-JSON leaf paths that always change on a save -> hidden under SUPPRESS_NOISE.
-_JSON_NOISE_LEAVES = {"modifieddatetime"}
 _MAX_JSON_DIFFS = 40
+# When a JSON list holds objects, key its elements by a stable id field (not the array
+# index) so a reordered list doesn't show every element as "changed".
+_LIST_KEYS = ("EntitlementId", "ResourceAppId", "Id", "id", "ObjectId", "objectId",
+              "AppId", "appId", "RoleDefinitionId", "PrincipalId", "Name", "name")
+
+def _list_key(elem):
+    if isinstance(elem, dict):
+        for k in _LIST_KEYS:
+            if elem.get(k) not in (None, ""):
+                return f"{k}={elem[k]}"
+    return None
 
 def _deep_parse(v):
     """Best-effort decode of a possibly JSON-encoded value. Entra often double-encodes
@@ -295,7 +479,8 @@ def _flatten(obj, prefix=""):
             out.update(_flatten(val, f"{prefix}.{k}" if prefix else str(k)))
     elif isinstance(obj, list):
         for i, val in enumerate(obj):
-            out.update(_flatten(val, f"{prefix}[{i}]"))
+            seg = _list_key(val)
+            out.update(_flatten(val, f"{prefix}[{seg}]" if seg else f"{prefix}[{i}]"))
     else:
         out[prefix or "value"] = obj
     return out
@@ -321,6 +506,8 @@ def real_changes(modified_properties):
         name = str(mp.get("displayName") or "")
         if name.strip().lower() in IGNORE_PROPERTIES:
             continue
+        if SUPPRESS_NOISE and name.split(".")[-1].split("[")[0].strip().lower() in NOISE_LEAVES:
+            continue
         old_raw, new_raw = mp.get("oldValue"), mp.get("newValue")
         old_n, new_n = _norm_val(old_raw), _norm_val(new_raw)
         if old_n == new_n:
@@ -332,8 +519,8 @@ def real_changes(modified_properties):
         if jdiff is not None:
             emitted = 0
             for path, a, b in jdiff:
-                leaf = path.split(".")[-1].split("[")[0].lower()
-                if SUPPRESS_NOISE and leaf in _JSON_NOISE_LEAVES:
+                leaf = path.split(".")[-1].split("[")[0].strip().lower()
+                if SUPPRESS_NOISE and leaf in NOISE_LEAVES:
                     continue
                 if emitted >= _MAX_JSON_DIFFS:
                     out.append({"name": f"{name} › …", "old": "",
@@ -380,6 +567,8 @@ def init_db(conn):
         resource TEXT, changed_at TEXT, notified_at TEXT)""")
     conn.execute("CREATE TABLE IF NOT EXISTS global_admins (object_id TEXT PRIMARY KEY, upn TEXT)")
     conn.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS dir_objects (object_id TEXT PRIMARY KEY, display TEXT, cached_at TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS app_perms (resource TEXT, perm_id TEXT, name TEXT, cached_at TEXT, PRIMARY KEY(resource, perm_id))")
     conn.commit()
 
 def mark_notified(conn, rec, now):
@@ -476,49 +665,92 @@ def ticket_subject(rec, is_test=False):
         action = action[:100] + "..."
     return f"{'[TEST] ' if is_test else ''}Wazuh: {_short_source(rec)} config change: {action}"
 
-def build_ticket_html(rec, is_test=False):
-    title = f"{'[TEST] ' if is_test else ''}Config change by global admin"
-    n_changes = sum(len(r["changes"]) for r in rec["resources"])
-    intro = (f'<p style="{_FONT}margin:0 0 12px;"><strong>{_esc(rec["actor_upn"] or rec["actor_id"])}</strong> '
-             f'({_esc(_short_source(rec))}) performed '
-             f'<strong>{_esc(rec["action"] or rec["operation"] or "a change")}</strong>: '
-             f'<strong>{n_changes}</strong> property change(s).</p>')
-    if is_test:
-        intro = (f'<p style="{_FONT}margin:0 0 8px;"><strong>This is a manual TEST mail.</strong> '
-                 'The dedup database was not modified.</p>') + intro
-    who = [("Actor", _esc(rec["actor_upn"] or "(unknown)")), ("Actor type", _esc(rec["actor_type"] or ""))]
+def _who_rows(rec, include_when=True):
+    rows = [("Actor", _esc(rec["actor_upn"] or rec["actor_id"] or "(unknown)")),
+            ("Actor type", _esc(_actor_type_label(rec["actor_type"])))]
     if rec["actor_app"]:
-        who.append(("Application", _esc(rec["actor_app"])))
+        rows.append(("Application", _esc(rec["actor_app"])))
     if rec["actor_ip"]:
-        who.append(("Source IP", _esc(rec["actor_ip"])))
-    who.append(("Global admin", _esc(rec.get("ga_reason", "")) or "yes"))
-    who.append(("When", _esc(_fmt_ts(rec["when"]))))
+        rows.append(("Source IP", _esc(rec["actor_ip"])))
+    rows.append(("Global admin", _esc(rec.get("ga_reason", "")) or "yes"))
+    if include_when:
+        rows.append(("When", _esc(_fmt_ts(rec["when"]))))
+    return rows
+
+def _resource_changes_html(r):
+    out = (f'<div style="{_FONT}font-size:13px;font-weight:bold;color:#0f172a;margin:8px 0 4px;">'
+           f'{_esc(r["display"] or r["rtype"] or "resource")}</div>')
+    if all(c["old"] == "(none)" for c in r["changes"]):
+        rows = [(_esc(c["name"]), f'<span style="color:#1a7f37;">{_esc(c["new"])}</span>') for c in r["changes"]]
+        out += _kv_table_html(["Property", "Value"], rows)
+        out += (f'<div style="{_FONT}font-size:11px;color:#94a3b8;margin:-8px 0 10px;">'
+                f'Only the resulting values were recorded (no previous values).</div>')
+    else:
+        rows = [(_esc(c["name"]), f'<span style="color:#b3261e;">{_esc(c["old"])}</span>',
+                 f'<span style="color:#1a7f37;">{_esc(c["new"])}</span>') for c in r["changes"]]
+        out += _kv_table_html(["Property", "Old", "New"], rows)
+    return out
+
+def _what_changes_html(rec):
     what = [("Action", _esc(rec["action"] or "")), ("Operation", _esc(rec["operation"] or "")),
             ("Result", _esc(rec["result"] or "")), ("Category", _esc(rec["category"] or "")),
             ("Source", _esc(rec["source_kind"])), ("Resource(s)", _esc(_res_summary(rec)))]
     if rec["correlation_id"]:
         what.append(("Correlation ID", _esc(rec["correlation_id"])))
-    body = (_section_bar_html("Who") + _kv_table_html(["Field", "Value"], who)
-            + _section_bar_html("What") + _kv_table_html(["Field", "Value"], what)
-            + _section_bar_html("What changed (old → new)"))
+    body = _section_bar_html("What") + _kv_table_html(["Field", "Value"], what)
+    body += _section_bar_html("What changed (old → new)")
+    shown = [_resource_changes_html(r) for r in rec["resources"] if r["changes"]]
+    body += "".join(shown) if shown else f'<div style="{_FONT}font-size:13px;color:#94a3b8;">(no field-level detail)</div>'
+    return body
+
+def build_ticket_html(rec, is_test=False):
+    n = sum(len(r["changes"]) for r in rec["resources"])
+    intro = (f'<p style="{_FONT}margin:0 0 12px;"><strong>{_esc(rec["actor_upn"] or rec["actor_id"])}</strong> '
+             f'({_esc(_short_source(rec))}) performed '
+             f'<strong>{_esc(rec["action"] or rec["operation"] or "a change")}</strong>: '
+             f'<strong>{n}</strong> property change(s).</p>')
+    if is_test:
+        intro = f'<p style="{_FONT}margin:0 0 8px;"><strong>This is a manual TEST mail.</strong></p>' + intro
+    body = _section_bar_html("Who") + _kv_table_html(["Field", "Value"], _who_rows(rec)) + _what_changes_html(rec)
+    return _html_page(f"{'[TEST] ' if is_test else ''}Config change by global admin", intro, body)
+
+def build_group_ticket_html(recs, is_test=False):
+    recs = _dedupe_events(recs)
+    if len(recs) == 1:
+        return build_ticket_html(recs[0], is_test)
+    obj = _group_object(recs[0]); actor = recs[0]["actor_upn"] or recs[0]["actor_id"]
+    intro = (f'<p style="{_FONT}margin:0 0 12px;"><strong>{_esc(actor)}</strong> '
+             f'({_esc(_short_source(recs[0]))}) made <strong>{len(recs)}</strong> configuration '
+             f'change(s) to <strong>{_esc(obj)}</strong>.</p>')
+    if is_test:
+        intro = f'<p style="{_FONT}margin:0 0 8px;"><strong>This is a manual TEST mail.</strong></p>' + intro
+    body = _section_bar_html("Who") + _kv_table_html(["Field", "Value"], _who_rows(recs[0], include_when=False))
+    for rec in sorted(recs, key=lambda r: r.get("when", "")):
+        body += (f'<div style="{_FONT}font-size:14px;font-weight:bold;color:#b3261e;margin:16px 0 0;">'
+                 f'{_esc(rec["action"] or rec["operation"] or "change")} — {_esc(_fmt_ts(rec["when"]))}</div>')
+        body += _what_changes_html(rec)
+    return _html_page(f"{'[TEST] ' if is_test else ''}{len(recs)} config changes — {_esc(obj)}", intro, body)
+
+def _what_changes_text(rec):
+    L = [f"Action      : {rec['action']}   op={rec['operation']}  result={rec['result']}",
+         f"Category    : {rec['category']}   Source: {rec['source_kind']}"]
+    if rec["correlation_id"]:
+        L.append(f"Correlation : {rec['correlation_id']}")
+    L.append("Changes (old -> new):")
+    any_ch = False
     for r in rec["resources"]:
         if not r["changes"]:
             continue
-        body += (f'<div style="{_FONT}font-size:13px;font-weight:bold;color:#0f172a;margin:8px 0 4px;">'
-                 f'{_esc(r["display"] or r["rtype"] or "resource")}</div>')
-        if all(c["old"] == "(none)" for c in r["changes"]):
-            # Intune (esp. settings-catalog / config policy 2.0) often records only the
-            # resulting state with a null oldValue -> show a plain values table.
-            rows = [(_esc(c["name"]), f'<span style="color:#1a7f37;">{_esc(c["new"])}</span>')
-                    for c in r["changes"]]
-            body += _kv_table_html(["Property", "Value"], rows)
-            body += (f'<div style="{_FONT}font-size:11px;color:#94a3b8;margin:-8px 0 10px;">'
-                     f'Intune recorded only the resulting values for this change (no previous values).</div>')
-        else:
-            diff_rows = [(_esc(c["name"]), f'<span style="color:#b3261e;">{_esc(c["old"])}</span>',
-                          f'<span style="color:#1a7f37;">{_esc(c["new"])}</span>') for c in r["changes"]]
-            body += _kv_table_html(["Property", "Old", "New"], diff_rows)
-    return _html_page(_esc(title), intro, body)
+        any_ch = True
+        L.append(f"  [{r['display'] or r['rtype'] or 'resource'}]")
+        allo = all(c["old"] == "(none)" for c in r["changes"])
+        for c in r["changes"]:
+            L.append(f"    - {c['name']}: {c['new']}" if allo else f"    - {c['name']}: {c['old']}  ->  {c['new']}")
+        if allo:
+            L.append("    (only resulting values recorded; no previous values)")
+    if not any_ch:
+        L.append("  (no field-level detail)")
+    return L
 
 def build_ticket_text(rec, is_test=False):
     L = []
@@ -527,30 +759,66 @@ def build_ticket_text(rec, is_test=False):
     L.append(f"{_short_source(rec)} config change by global admin")
     L.append("=" * 72)
     L.append(f"Actor       : {rec['actor_upn'] or rec['actor_id']}")
-    L.append(f"Actor type  : {rec['actor_type']}")
+    L.append(f"Actor type  : {_actor_type_label(rec['actor_type'])}")
     if rec["actor_app"]:
         L.append(f"Application : {rec['actor_app']}")
     if rec["actor_ip"]:
         L.append(f"Source IP  : {rec['actor_ip']}")
     L.append(f"Global admin: {rec.get('ga_reason', 'yes')}")
     L.append(f"When        : {_fmt_ts(rec['when'])}")
-    L.append(f"Action      : {rec['action']}   op={rec['operation']}  result={rec['result']}")
-    L.append(f"Category    : {rec['category']}   Source: {rec['source_kind']}")
-    if rec["correlation_id"]:
-        L.append(f"Correlation : {rec['correlation_id']}")
-    L.append("")
-    L.append("Changes (old -> new):")
-    for r in rec["resources"]:
-        if not r["changes"]:
-            continue
-        L.append(f"  [{r['display'] or r['rtype'] or 'resource'}]")
-        allo = all(c["old"] == "(none)" for c in r["changes"])
-        for c in r["changes"]:
-            L.append(f"    - {c['name']}: {c['new']}" if allo
-                     else f"    - {c['name']}: {c['old']}  ->  {c['new']}")
-        if allo:
-            L.append("    (Intune recorded only the resulting values; no previous values)")
+    L += _what_changes_text(rec)
     return "\n".join(L)
+
+def build_group_ticket_text(recs, is_test=False):
+    recs = _dedupe_events(recs)
+    if len(recs) == 1:
+        return build_ticket_text(recs[0], is_test)
+    obj = _group_object(recs[0]); actor = recs[0]["actor_upn"] or recs[0]["actor_id"]
+    L = ["*** TEST mail ***"] if is_test else []
+    L.append(f"{len(recs)} config changes to {obj} by {actor}")
+    L.append("=" * 72)
+    L.append(f"Actor       : {actor}")
+    L.append(f"Actor type  : {_actor_type_label(recs[0]['actor_type'])}")
+    if recs[0]["actor_ip"]:
+        L.append(f"Source IP  : {recs[0]['actor_ip']}")
+    L.append(f"Global admin: {recs[0].get('ga_reason', 'yes')}")
+    for rec in sorted(recs, key=lambda r: r.get("when", "")):
+        L.append("")
+        L.append(f"--- {rec['action'] or 'change'} — {_fmt_ts(rec['when'])} ---")
+        L += _what_changes_text(rec)
+    return "\n".join(L)
+
+def _dedupe_events(recs):
+    seen, out = set(), []
+    for r in recs:
+        sig = (r["action"], r["operation"], tuple(sorted(
+            (c["name"], c["old"], c["new"]) for res in r["resources"] for c in res["changes"])))
+        if sig in seen:
+            continue
+        seen.add(sig); out.append(r)
+    return out
+
+def _group_object(rec):
+    for r in rec["resources"]:
+        if r.get("display"):
+            return r["display"]
+    for r in rec["resources"]:
+        for c in r["changes"]:
+            if c["name"].strip().lower().endswith("displayname"):
+                v = c["new"] if c["new"] not in ("(none)", "") else c["old"]
+                if v and v != "(none)":
+                    return v
+    return rec.get("action") or "change"
+
+def group_key(rec):
+    return (rec.get("actor_upn") or rec.get("actor_id"), rec["source"], _group_object(rec))
+
+def group_subject(recs, is_test=False):
+    recs = _dedupe_events(recs)
+    if len(recs) == 1:
+        return ticket_subject(recs[0], is_test)
+    obj = _group_object(recs[0])
+    return f"{'[TEST] ' if is_test else ''}Wazuh: {_short_source(recs[0])} config change: {obj} — {len(recs)} changes"[:200]
 
 def feed_events(path, records):
     """Append each record's native ms-graph event to a JSON logfile for Wazuh ingestion.
@@ -618,6 +886,8 @@ def gather(conn, token, hits):
             kept.append(r)
     if skipped:
         print(f"[gather] skipped {skipped} Entra event(s): global-admin set unavailable")
+    annotate_guids(conn, token, kept)   # directory/app GUIDs -> display names (best-effort)
+    annotate_perms(conn, token, kept)   # EntitlementId / AppRole.Id -> permission names
     print(f"[gather] global-admin config changes with real diffs: {len(kept)}")
     return kept
 
@@ -653,9 +923,17 @@ def run(args):
         already = {row[0] for row in conn.execute("SELECT event_key FROM notified")}
         new = [r for r in kept if event_key(r) not in already]
         print(f"[notify] new (not yet notified): {len(new)}")
-        if args.dry_run:
+        # Group for email (the Wazuh feed stays per-event). One email per (admin, object).
+        if args.group:
+            buckets = {}
             for r in new:
-                print("  NEW:", ticket_subject(r))
+                buckets.setdefault(group_key(r), []).append(r)
+            batches = list(buckets.values())
+        else:
+            batches = [[r] for r in new]
+        if args.dry_run:
+            for b in batches:
+                print("  NEW:", group_subject(b))
             return
         if new and args.feed_file:
             fed = feed_events(args.feed_file, new)
@@ -667,15 +945,18 @@ def run(args):
         if not recips:
             raise SystemExit("No recipients (set RECIPIENTS or --recipients).")
         sent, errs = 0, 0
-        for r in new:
+        for b in batches:
             try:
-                send_mail(recips, ticket_subject(r), build_ticket_text(r), build_ticket_html(r),
+                send_mail(recips, group_subject(b), build_group_ticket_text(b), build_group_ticket_html(b),
                           args.smtp_server, args.smtp_port)
-                mark_notified(conn, r, now); sent += 1
+                for r in b:
+                    mark_notified(conn, r, now)
+                sent += 1
             except Exception as e:
-                errs += 1; print(f"[notify] send failed for {event_key(r)}: {e}")
+                errs += 1; print(f"[notify] send failed for group ({len(b)} event(s)): {e}")
         conn.commit()
-        print(f"[notify] sent {sent} ticket(s) to {recips}" + (f" ({errs} error(s))" if errs else ""))
+        print(f"[notify] sent {sent} email(s) for {len(new)} change(s) to {recips}"
+              + (f" ({errs} error(s))" if errs else ""))
     finally:
         conn.close()
 
@@ -695,6 +976,9 @@ def main():
     ap.add_argument("--seed", action="store_true", help="set bookmarks to now (no email), then exit")
     ap.add_argument("--dry-run", action="store_true", help="print what would be sent; no email")
     ap.add_argument("--test", action="store_true", help="send a sample ticket from the most recent match")
+    ap.add_argument("--no-group", dest="group", action="store_false",
+                    help="one email per event instead of grouping per (admin + object)")
+    ap.set_defaults(group=GROUP_TICKETS)
     run(ap.parse_args())
 
 if __name__ == "__main__":

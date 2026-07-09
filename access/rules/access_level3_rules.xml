@@ -1,0 +1,83 @@
+<!--
+  Access visibility — raise access events from level 0 (archive-only) to level >=3 so they
+  land in wazuh-alerts-*. Custom IDs 100730-100741.
+  Deploy: copy to /var/ossec/etc/rules/ (chown root:wazuh, chmod 0640), then restart the manager.
+  Validate: /var/ossec/bin/wazuh-logtest  (paste a sample event; expect the rule below to fire).
+
+  Why this exists: RDP *success* (4624 type10 -> 92653), SSH (5715) and failed logons already
+  alert. But the RDP NLA/session-lifecycle events, logoffs, and all post-logon process activity
+  are level 0 -> they only exist in wazuh-archives-*. These rules pull the low-volume access
+  signals up to level 3. The high-volume process firehose stays OPT-IN (Tier 3, commented out).
+-->
+
+<group name="windows,access_visibility,">
+
+  <!-- ============ Tier 1 — RDP session lifecycle (LOW volume, recommended) ============
+       TerminalServices channels have no stock rule (level 0). Fields are under win.eventXML.* -->
+  <rule id="100730" level="3">
+    <if_sid>60000</if_sid>
+    <field name="win.system.channel">Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational</field>
+    <field name="win.system.eventID">^1149$</field>
+    <description>RDP: NLA authentication succeeded for $(win.eventXML.param1) from $(win.eventXML.param3)</description>
+    <mitre><id>T1021.001</id></mitre>
+    <group>rdp,authentication_success,</group>
+  </rule>
+
+  <rule id="100731" level="3">
+    <if_sid>60000</if_sid>
+    <field name="win.system.channel">Microsoft-Windows-TerminalServices-LocalSessionManager/Operational</field>
+    <field name="win.system.eventID">^21$|^25$</field>
+    <description>RDP: session logon/reconnect for $(win.eventXML.user), session $(win.eventXML.sessionID)</description>
+    <mitre><id>T1021.001</id></mitre>
+    <group>rdp,</group>
+  </rule>
+
+  <rule id="100732" level="3">
+    <if_sid>60000</if_sid>
+    <field name="win.system.channel">Microsoft-Windows-TerminalServices-LocalSessionManager/Operational</field>
+    <field name="win.system.eventID">^23$|^24$</field>
+    <description>RDP: session logoff/disconnect for $(win.eventXML.user), session $(win.eventXML.sessionID)</description>
+    <group>rdp,</group>
+  </rule>
+
+  <!-- ============ Tier 2 — interactive/RDP logoff (MODERATE; scoped to logonType 2/10) ============
+       4634 network logoffs are very high volume, so this only elevates console/RDP logoffs. -->
+  <rule id="100735" level="3">
+    <if_sid>60001</if_sid>
+    <field name="win.system.eventID">^4634$|^4647$</field>
+    <field name="win.eventdata.logonType">^10$|^2$</field>
+    <description>Windows: interactive/RDP logoff for $(win.eventdata.targetUserName)</description>
+    <group>logoff,</group>
+  </rule>
+
+</group>
+
+<!-- =====================================================================================
+     Tier 3 · POST-LOGON PROCESS ACTIVITY · HIGH VOLUME · OPT-IN ONLY
+     Sysmon Event 1 (~0.75M events/day in a mid-size estate) and PowerShell 4104 are level 0
+     BY DESIGN. Elevating them to level 3 pushes the ENTIRE process-creation firehose into
+     wazuh-alerts-*, which greatly increases index size, cost and noise.
+
+     Enable ONLY if you deliberately want post-logon activity in wazuh-alerts-* (e.g. to point
+     the whole "Account Access & Activity" dashboard at wazuh-alerts-* instead of archives).
+     RECOMMENDED default: leave these commented out and keep activity in wazuh-archives-*
+     (the dashboard's activity panels already read the archives index pattern).
+
+     To enable: uncomment, redeploy, restart the manager, and size your indexer for the volume.
+
+  <group name="windows,sysmon,access_visibility,">
+    <rule id="100740" level="3">
+      <if_sid>61603</if_sid>
+      <description>Sysmon Event 1: process $(win.eventdata.image) by $(win.eventdata.user)</description>
+      <group>sysmon_event1,process_activity,</group>
+    </rule>
+  </group>
+
+  <group name="windows,powershell,access_visibility,">
+    <rule id="100741" level="3">
+      <if_sid>91801,91802</if_sid>
+      <description>PowerShell script block executed on $(win.system.computer)</description>
+      <group>powershell,process_activity,</group>
+    </rule>
+  </group>
+======================================================================================= -->

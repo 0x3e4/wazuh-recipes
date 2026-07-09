@@ -8,6 +8,7 @@ decoders, rules, dashboards and any automation — with its own README and insta
 
 | Recipe | What it does |
 |--------|--------------|
+| [access](access/) | A combined dashboard (plus optional level-≥3 rules) for who connects to servers via RDP/SSH — from where, to which host, and what they did after: Sysmon Event 1 process activity with a `logonId` session drill-down, PowerShell, and Linux sudo. |
 | [bruteforce-success](bruteforce-success/) | A dashboard + weekly email summary for Wazuh rule 40112 (auth failures followed by a success) — credential brute-forcing that actually worked, with top source IPs, targeted accounts and affected hosts. |
 | [dns-threat](dns-threat/) | Detection rules, dashboards and a weekly email summary for suspicious outgoing DNS on Windows (Sysmon Event 22) — DGA/long domains, bad TLDs and odd resolvers; normal DNS stays archive-only. |
 | [editor-extension-monitoring](editor-extension-monitoring/) | Inventory installed VS Code / Visual Studio extensions across Windows endpoints and alert on banned or known-malicious ones — version-aware, with an automated [OSV.dev](https://osv.dev) feed. |

@@ -1,0 +1,18 @@
+[Unit]
+Description=ClamAV detection email digest (notify-once)
+After=network-online.target wazuh-indexer.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Reads the indexer, writes a small SQLite file, sends mail -- no root needed.
+User=wazuh-recipes
+Group=wazuh-recipes
+RuntimeMaxSec=300
+EnvironmentFile=/opt/antivirus-mail/antivirus-mail.env
+# >>> set recipients + SMTP here (or in the env file) <<<
+ExecStart=/opt/antivirus-mail/venv/bin/python /opt/antivirus-mail/av_alert_digest.py \
+          --source clamav \
+          --recipients security@example.com \
+          --smtp-server smtp.example.com \
+          --state-db /opt/antivirus-mail/clamav-state.db

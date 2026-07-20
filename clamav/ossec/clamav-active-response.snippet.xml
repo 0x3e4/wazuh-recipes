@@ -1,0 +1,33 @@
+<!--
+  ClamAV auto-quarantine via Wazuh Active Response.
+
+  ClamAV (unlike Defender) does not remediate by default - it only detects. This makes Wazuh
+  quarantine the infected file on the endpoint when detection rule 100931 fires.
+
+  Setup:
+   1. On EACH ubuntu/debian agent, install the AR script (it is NOT pushed by shared config):
+        sudo install -o root -g wazuh -m 0750 \
+          active-response/bin/clamav-quarantine.sh /var/ossec/active-response/bin/
+   2. On the MANAGER, add the two blocks below inside <ossec_config> in
+      /var/ossec/etc/ossec.conf, then: sudo systemctl restart wazuh-manager
+
+  It MOVES the file to /var/ossec/quarantine (mode 000) - reversible, not deleted - and logs to
+  /var/ossec/logs/active-responses.log. It refuses to touch system directories. Auto-remediation
+  is powerful: pilot on a test host first, and scope <rules_id> if you only want it on some hosts
+  (or use <location>defined-agent</location> + <agent_id>).
+
+  Native alternative (no Wazuh AR): configure ClamAV itself, e.g. on-access with
+  OnAccessPrevention=yes in clamd.conf (blocks access), or a scheduled clamdscan that moves
+  infected files to a quarantine dir (clamdscan's move option).
+-->
+<command>
+  <name>clamav-quarantine</name>
+  <executable>clamav-quarantine.sh</executable>
+  <timeout_allowed>no</timeout_allowed>
+</command>
+
+<active-response>
+  <command>clamav-quarantine</command>
+  <location>local</location>
+  <rules_id>100931</rules_id>
+</active-response>

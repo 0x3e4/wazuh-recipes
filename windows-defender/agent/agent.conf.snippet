@@ -1,0 +1,34 @@
+<!--
+  Collect Microsoft Defender Antivirus events into Wazuh.
+
+  Add this <localfile> to the shared config of your Windows agent group (the recipe targets
+  the "windows" group): on the MANAGER, edit /var/ossec/etc/shared/windows/agent.conf and
+  place the block inside <agent_config>...</agent_config>. The manager pushes it to agents;
+  restart is automatic (or `sudo /var/ossec/bin/agent_groups -a` / wait for the pull).
+
+  Defender writes to its own eventchannel "Microsoft-Windows-Windows Defender/Operational",
+  which is NOT collected by default. Once collected, Wazuh's base rule 60005 matches it and
+  the stock rules (62100-62111, 83001-83002) plus this recipe's rules (100900-100929) fire.
+
+  No logcollector.remote_commands change is needed (this is an eventchannel source, not a
+  command). These events are also mirrored to the Application log on some builds, but the
+  Operational channel is the authoritative, complete source.
+-->
+<agent_config os="windows">
+
+  <localfile>
+    <location>Microsoft-Windows-Windows Defender/Operational</location>
+    <log_format>eventchannel</log_format>
+  </localfile>
+
+  <!-- Optional: also capture Defender's few Application-log entries (older 1116/1117 via
+       the "Microsoft Antimalware"/"Windows Defender" source). Harmless if absent. -->
+  <!--
+  <localfile>
+    <location>Application</location>
+    <log_format>eventchannel</log_format>
+    <query>Event/System[Provider[@Name='Microsoft Antimalware' or @Name='Windows Defender']]</query>
+  </localfile>
+  -->
+
+</agent_config>

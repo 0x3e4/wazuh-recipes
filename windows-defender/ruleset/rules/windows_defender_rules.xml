@@ -1,0 +1,93 @@
+<!--
+  Microsoft Defender Antivirus - enrichment, tamper & notification rules.
+
+  ID range: 100900-100929        Part of the windows-defender wazuh-recipe.
+
+  Source: the "Microsoft-Windows-Windows Defender/Operational" eventchannel (see
+  agent/agent.conf.snippet), decoded by Wazuh's windows_eventchannel decoder. Base rule
+  60005 matches that channel; STOCK ruleset 0600-win-wdefender_rules.xml already covers
+  detection/action/quarantine/scan/update comprehensively (62113 malware found, 62122
+  suspicious behaviour, 62123 PUA detected, 62114/62124 actions, 62115/62125/62126 failed
+  actions, 62116/62118/62120 quarantine, 2000/2001 updates, 1150/1151 health).
+
+  So this recipe does NOT re-implement detection. It:
+   * ENRICHES the stock detection/failed-action alerts by chaining off them to add the threat
+     name, MITRE, a stable group (defender_detection) and email flagging - producing ONE
+     enriched alert (the child supersedes the stock parent).
+   * ADDS the TAMPER events stock omits: real-time protection disabled (5001), scanning
+     disabled (5010/5012), and configuration/exclusion changes (5007) -> MITRE T1562.
+   * ADDS a malware OUTBREAK correlation.
+
+  IMPORTANT field note (verified on a live event): Defender's structured eventdata uses field
+  names WITH A SPACE - the threat name is `win.eventdata.threat Name` (not `threatName`), and
+  severity is `win.eventdata.severity Name`. Dashboards/descriptions must use the spaced name.
+
+  Email: detections are mailed as HTML tickets by bin/av_alert_digest.py on a systemd timer
+  (notify-once) - see the README. This recipe does NOT use Wazuh native alert_by_email.
+
+  Deploy: copy to /var/ossec/etc/rules/, chown root:wazuh, chmod 0640, restart the manager.
+  Validate with /var/ossec/bin/wazuh-logtest. Change IDs 100900-100929 if they clash.
+-->
+<group name="windows,windows_defender,">
+
+  <!-- Enrich stock malware/PUA/behaviour detection (62113 found, 62122 behaviour, 62123 PUA):
+       add threat name + MITRE + a stable group, and flag for email. The child supersedes the
+       stock parent, so you get a single enriched alert. -->
+  <rule id="100901" level="12">
+    <if_sid>62113,62122,62123</if_sid>
+    <description>Windows Defender: MALWARE DETECTED - $(win.eventdata.threat Name) [$(win.eventdata.severity Name)] on $(win.system.computer)</description>
+    <mitre><id>T1588.001</id></mitre>
+    <options>no_full_log</options>
+    <group>defender_detection,virus,pci_dss_5.1,pci_dss_5.2,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_SI.3,tsc_CC6.8,</group>
+  </rule>
+
+  <!-- Enrich stock FAILED-action / critical-error events (62115/62125/62126): threat may persist. -->
+  <rule id="100902" level="12">
+    <if_sid>62115,62125,62126</if_sid>
+    <description>Windows Defender: action FAILED on $(win.eventdata.threat Name) - $(win.system.computer) (threat may persist)</description>
+    <mitre><id>T1588.001</id></mitre>
+    <options>no_full_log</options>
+    <group>defender_detection,virus,pci_dss_5.1,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_SI.3,tsc_CC7.3,</group>
+  </rule>
+
+  <!-- Real-time protection DISABLED (defense tamper) - stock has no rule for 5001. -->
+  <rule id="100906" level="12">
+    <if_sid>60005</if_sid>
+    <field name="win.system.eventID">^5001$</field>
+    <description>Windows Defender: real-time protection DISABLED on $(win.system.computer)</description>
+    <mitre><id>T1562.001</id></mitre>
+    <options>no_full_log</options>
+    <group>defender_tamper,pci_dss_5.2,pci_dss_10.6.1,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_SI.3,nist_800_53_CM.7,tsc_CC6.8,tsc_CC7.1,</group>
+  </rule>
+
+  <!-- Malware / virus scanning DISABLED (defense tamper). -->
+  <rule id="100907" level="12">
+    <if_sid>60005</if_sid>
+    <field name="win.system.eventID" type="pcre2">^(5010|5012)$</field>
+    <description>Windows Defender: malware/virus scanning DISABLED on $(win.system.computer)</description>
+    <mitre><id>T1562.001</id></mitre>
+    <options>no_full_log</options>
+    <group>defender_tamper,pci_dss_5.2,gdpr_IV_35.7.d,nist_800_53_SI.3,nist_800_53_CM.7,tsc_CC6.8,tsc_CC7.1,</group>
+  </rule>
+
+  <!-- Configuration / exclusion changed (possible tamper: adding an AV exclusion). -->
+  <rule id="100908" level="8">
+    <if_sid>60005</if_sid>
+    <field name="win.system.eventID">^5007$</field>
+    <description>Windows Defender: configuration changed (e.g. exclusion) on $(win.system.computer)</description>
+    <mitre><id>T1562.001</id><id>T1562.006</id></mitre>
+    <options>no_full_log</options>
+    <group>defender_tamper,pci_dss_10.6.1,gdpr_IV_35.7.d,nist_800_53_CM.3,nist_800_53_CM.7,tsc_CC8.1,</group>
+  </rule>
+
+  <!-- Malware outbreak: repeated detections on the same host in a short window. -->
+  <rule id="100912" level="13" frequency="5" timeframe="300">
+    <if_matched_sid>100901</if_matched_sid>
+    <same_field>win.system.computer</same_field>
+    <description>Windows Defender: malware OUTBREAK - multiple detections on $(win.system.computer)</description>
+    <mitre><id>T1588.001</id></mitre>
+    <options>no_full_log</options>
+    <group>defender_detection,virus,pci_dss_5.1,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_SI.3,nist_800_53_SI.4,tsc_CC7.3,</group>
+  </rule>
+
+</group>

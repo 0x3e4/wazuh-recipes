@@ -1,0 +1,34 @@
+<!--
+  Collect ClamAV logs into Wazuh (Ubuntu / Debian).
+
+  Add these <localfile> blocks to the shared config of your Linux agent groups. The recipe
+  targets the "ubuntu" and "debian" groups: on the MANAGER, edit
+  /var/ossec/etc/shared/ubuntu/agent.conf AND /var/ossec/etc/shared/debian/agent.conf and
+  place the block inside <agent_config>...</agent_config>. The manager pushes it to agents.
+
+  These are file sources (no logcollector.remote_commands needed). The recipe's decoder
+  (clamav-file) + rules (100930-100959) parse the file format and raise detections.
+
+  On-access scanning: to get REAL-TIME detections (not just scheduled clamscan), enable the
+  on-access daemon `clamonacc` (package clamav-daemon) so clamd logs FOUND events as files
+  are touched. Paths below are the Debian/Ubuntu defaults.
+
+  Alternative: set `LogSyslog yes` in /etc/clamav/clamd.conf (and clamonacc) so detections go
+  to syslog with program "clamd" -> Wazuh's STOCK clamd rules (52500-52509) fire from your
+  existing syslog collection, and this file collection becomes optional.
+-->
+<agent_config>
+
+  <!-- clamd / clamonacc / clamdscan detections + errors. -->
+  <localfile>
+    <location>/var/log/clamav/clamav.log</location>
+    <log_format>syslog</log_format>
+  </localfile>
+
+  <!-- freshclam signature-update status (update failures = stale protection). -->
+  <localfile>
+    <location>/var/log/clamav/freshclam.log</location>
+    <log_format>syslog</log_format>
+  </localfile>
+
+</agent_config>

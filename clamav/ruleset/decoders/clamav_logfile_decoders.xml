@@ -1,0 +1,46 @@
+<!--
+  ClamAV log-FILE decoder (Ubuntu/Debian).
+
+  Wazuh ships a `clamd`/`freshclam` decoder (0075-clamav_decoders.xml) but it is keyed on
+  <program_name> (i.e. clamd/freshclam logging via SYSLOG). On Debian/Ubuntu, ClamAV writes
+  to plain files (/var/log/clamav/clamav.log, freshclam.log) that carry NO syslog program
+  tag, so the stock decoder does not match a file read. This decoder parses that file format:
+
+    Mon Jul 13 10:20:30 2026 -> /home/user/eicar.com: Win.Test.EICAR_HDB-1 FOUND
+    Mon Jul 13 10:20:31 2026 -> ERROR: Can't access file ...
+    Mon Jul 13 09:00:05 2026 -> daily.cvd updated (version: 27000, sigs: 2000000)
+    Mon Jul 13 09:00:05 2026 -> Can't download daily.cvd from db.local.clamav.net
+
+  It extracts the detected file path and signature into data.clamav.path / data.clamav.signature.
+  (If instead you set `LogSyslog yes` in clamd/clamonacc, the stock `clamd` decoder + rules
+  52500-52509 handle it and this file decoder is not needed.)
+
+  Deploy: copy to /var/ossec/etc/decoders/, chown root:wazuh, chmod 0640, restart the manager.
+  Validate with /var/ossec/bin/wazuh-logtest.
+-->
+
+<decoder name="clamav-file">
+  <prematch>^\w\w\w \w\w\w +\d+ \d\d:\d\d:\d\d \d\d\d\d -> </prematch>
+</decoder>
+
+<decoder name="clamav-file">
+  <parent>clamav-file</parent>
+  <regex>-> (\.+): (\S+) FOUND$</regex>
+  <order>clamav.path, clamav.signature</order>
+</decoder>
+
+<!--
+  Modern-format extractor for clamd/clamonacc detections logged to SYSLOG. Wazuh's stock
+  `clamd` decoder matches the syslog line (program_name clamd) and stock rule 52502 fires,
+  but the stock `clamd-found` child only parses the LEGACY "Signature(md5:offset)" format,
+  so modern ClamAV output ("path: Signature FOUND", e.g. Eicar-Test-Signature) decodes with
+  NO extracted fields. This child (parent = the stock `clamd` decoder) fills the gap into the
+  SAME data.clamav.* fields the file decoder uses, so dashboards work for syslog and file.
+  Example: ... clamd[763689]: Thu Jul 16 18:04:05 2026 -> /tmp/eicar.com: Eicar-Test-Signature FOUND
+-->
+<decoder name="clamd">
+  <parent>clamd</parent>
+  <prematch> FOUND$</prematch>
+  <regex>-> (\.+): (\S+) FOUND$</regex>
+  <order>clamav.path, clamav.signature</order>
+</decoder>

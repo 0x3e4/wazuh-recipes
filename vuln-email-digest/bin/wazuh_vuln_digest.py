@@ -186,7 +186,11 @@ def persist_and_diff(conn, rows, seed=False, renotify_days=DEFAULT_RENOTIFY_DAYS
                      resolve_grace_hours=RESOLVE_GRACE_HOURS, now=None):
     """Upsert current inventory; return (new, resolved, aging) eligible row lists."""
     now = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=renotify_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # renotify_days <= 0 disables the aging re-notify: push the cutoff far into the past so
+    # no still-open vuln is ever "older than the threshold" (0 must NOT mean cutoff=now, which
+    # would re-notify every run).
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=(renotify_days if renotify_days > 0 else 3650000))).strftime("%Y-%m-%dT%H:%M:%SZ")
     resolve_cutoff = (datetime.now(timezone.utc) - timedelta(hours=resolve_grace_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
     cur = conn.cursor()
 
@@ -946,7 +950,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="print what would be sent; send no email, no DB change")
     ap.add_argument("--always", action="store_true", help="send even when there is nothing new/resolved/aging")
     ap.add_argument("--recipients", default=DEFAULT_RECIPIENTS, help="comma-separated recipient list")
-    ap.add_argument("--renotify-days", type=int, default=DEFAULT_RENOTIFY_DAYS, help="aging threshold in days")
+    ap.add_argument("--renotify-days", type=int, default=DEFAULT_RENOTIFY_DAYS,
+                    help="re-notify threshold in days for still-open vulns (0 = disable re-notification)")
     ap.add_argument("--resolve-grace-hours", type=int, default=RESOLVE_GRACE_HOURS,
                     help="hours a finding must be absent before it counts as resolved (anti-flap)")
     ap.add_argument("--state-db", default=STATE_DB_DEFAULT, help="sqlite dedup DB path")

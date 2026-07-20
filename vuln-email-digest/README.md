@@ -154,7 +154,7 @@ sudo -u wazuh-vuln $PY $APP --severity Critical,High --dry-run                  
 | `--test-cve <CVE>` | One-off test ticket for a CVE (no DB change) |
 | `--test-report` | Sample report from current inventory (no DB change) |
 | `--recipients a@x,b@y` | Recipient list (or `DIGEST_RECIPIENTS` env / per-unit) |
-| `--renotify-days N` | "Still open" aging reminder threshold (default 30) |
+| `--renotify-days N` | "Still open" aging reminder threshold in days (default 30; **`0` disables** re-notification — new-vuln tickets still fire once) |
 | `--resolve-grace-hours N` | Absence before a finding counts as resolved (default 168 = 7 days) |
 | `--no-verify` / `--ca PATH` | Indexer TLS handling |
 

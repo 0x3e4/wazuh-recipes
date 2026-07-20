@@ -1,0 +1,71 @@
+<!--
+  ClamAV (Ubuntu/Debian) - detection, outbreak and update-health rules.
+
+  ID range: 100930-100959        Part of the clamav wazuh-recipe.
+
+  Source: /var/log/clamav/clamav.log + freshclam.log, read by the agent (see
+  agent/agent.conf.snippet) and parsed by ruleset/decoders/clamav_logfile_decoders.xml
+  (decoded_as clamav-file). If you use clamd `LogSyslog yes` instead, Wazuh's stock clamd
+  rules (52500-52509) also fire - these rules complement, not replace, them.
+
+  Deploy: copy to /var/ossec/etc/rules/, chown root:wazuh, chmod 0640, restart the manager.
+  Validate with /var/ossec/bin/wazuh-logtest. Change IDs 100930-100959 if they clash.
+-->
+<group name="clamav,">
+
+  <!-- Base: any parsed ClamAV log-file line. -->
+  <rule id="100930" level="0">
+    <decoded_as>clamav-file</decoded_as>
+    <description>ClamAV log message.</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <!-- Malware detected (FOUND). Chains BOTH the file path (100930, decoded_as clamav-file)
+       AND the syslog path (stock 52502, decoded_as clamd) so one enriched alert fires either
+       way, carrying data.clamav.signature/path (from the recipe decoders) + email flag. -->
+  <rule id="100931" level="10">
+    <if_sid>100930,52502</if_sid>
+    <match>FOUND</match>
+    <description>ClamAV: malware detected - $(clamav.signature) in $(clamav.path)</description>
+    <mitre><id>T1588.001</id></mitre>
+    <options>no_full_log</options>
+    <group>virus,virus_detected,pci_dss_5.1,pci_dss_5.2,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_SI.3,tsc_CC6.8,</group>
+  </rule>
+
+  <!-- Outbreak: repeated ClamAV detections in a short window. -->
+  <rule id="100932" level="12" frequency="6" timeframe="300">
+    <if_matched_sid>100931</if_matched_sid>
+    <description>ClamAV: multiple malware detections (possible outbreak)</description>
+    <mitre><id>T1588.001</id></mitre>
+    <options>no_full_log</options>
+    <group>virus,virus_detected,pci_dss_5.1,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_SI.3,nist_800_53_SI.4,tsc_CC7.3,</group>
+  </rule>
+
+  <!-- clamd/scan error. -->
+  <rule id="100933" level="7">
+    <if_sid>100930</if_sid>
+    <match>ERROR: </match>
+    <description>ClamAV: scan/daemon error</description>
+    <options>no_full_log</options>
+    <group>pci_dss_10.6.1,gdpr_IV_35.7.d,nist_800_53_AU.6,tsc_CC7.2,</group>
+  </rule>
+
+  <!-- Signature update FAILED (freshclam) - protection going stale. -->
+  <rule id="100934" level="7">
+    <if_sid>100930</if_sid>
+    <match>Can't download|update failed|Incremental update failed|Can't query|failed to download|WARNING: Can't</match>
+    <description>ClamAV: signature update FAILED (freshclam)</description>
+    <options>no_full_log</options>
+    <group>clamav_update,pci_dss_5.2,gdpr_IV_35.7.d,nist_800_53_SI.3,tsc_CC7.1,</group>
+  </rule>
+
+  <!-- Signature database updated OK (freshclam). -->
+  <rule id="100935" level="2">
+    <if_sid>100930</if_sid>
+    <match>updated |is up to date|database available for download|correctly reloaded</match>
+    <description>ClamAV: signature database update</description>
+    <options>no_full_log</options>
+    <group>clamav_update,</group>
+  </rule>
+
+</group>

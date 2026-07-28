@@ -212,6 +212,111 @@ Permission-name resolution uses each resource service principal's published `app
 `oauth2PermissionScopes` (keyed off the `ResourceAppId` in the change path, plus a well-known
 resource map for role-assignment events); ids from resources the app can't read stay as GUIDs.
 
+## Microsoft 365 workloads — Exchange / Defender / Purview / Security & Compliance
+
+Microsoft Graph (what the Entra/Intune halves use) **does not expose** Exchange admin,
+Microsoft Defender, Purview, Security & Compliance, DLP or SharePoint/Teams *admin* changes
+at all. Those live only in the **Office 365 Management Activity API** (the Unified Audit
+Log) — a different API with a different schema. Wazuh ingests it through the
+[`office365` module](https://documentation.wazuh.com/current/user-manual/capabilities/office365/index.html)
+(`rule.groups:office365`, `data.office365.*`), so a **separate, indexer-based collector**
+handles it: `bin/entra-config-changes_office365.py`. It shares the ticket look, notify-once
+dedup and grouping, but reads the indexer instead of Graph and understands the Management
+Activity schema (cmdlet `Parameters` and `ModifiedProperties`).
+
+```
+ Wazuh Indexer (wazuh-alerts-4.x-*, rule.groups:office365)  = Management Activity events
+        │  HTTPS query (last LOOKBACK_HOURS), admin surfaces only
+        ▼
+ entra-config-changes_office365.py ─┬─ drop the firehose (Endpoint file activity, Teams/
+                                    │    SharePoint/OneDrive file access ≈ 90% of volume)
+                                    ├─ keep config ops only: mutating Verb-Noun cmdlets
+                                    │    (Set-/New-/Remove-…) + curated admin ops; drop
+                                    │    Get-/Search-/read/triage/file activity
+                                    ├─ mutating cmdlets kept regardless of UserType (RBAC-
+                                    │    gated); curated ops require a human UserType (drops
+                                    │    application / service-principal automation)
+                                    ├─ SQLite state DB (notify-once) + group per admin+object
+                                    └─ SMTP ─▶ HTML ticket (who / what / parameters | old→new)
+```
+
+**What it covers** (workloads): Exchange Online admin, Security & Compliance / Purview
+(RecordType 18 cmdlets), Defender, Power Platform, plus curated admin operations for
+Teams/SharePoint. **What it excludes on purpose:** the `Endpoint` endpoint-DLP file
+firehose and Teams/OneDrive/SharePoint file & message activity (not configuration), and
+`AzureActiveDirectory` (RecordType 8) — Entra is already owned by the Graph poller, so this
+avoids double-notifying.
+
+**Gating is two-tier.** Management Activity marks the actor with `UserType` (2 = Admin,
+3 = Datacenter admin, 5 = Application, 6 = Service principal), **but it is unreliable** —
+the Security/Compliance portal attributes the same admin's cmdlets to `UserType` 2 *or* 5
+depending on how they were invoked. So:
+
+- **Mutating cmdlets** (`Set-…`/`New-…`/`Remove-…`) are kept **regardless of `UserType`** —
+  RBAC means only an authorised admin could have run them, and they are genuine config
+  changes. This is what guarantees a real `Set-AntiPhishPolicy` is never dropped over a
+  `UserType` quirk.
+- **Curated single-token ops** (`TeamsAdminAction`, `AddIndicator`, …) are automation-prone,
+  so they additionally require a human `UserType` (`ADMIN_USERTYPES`, default `2,3`). That is
+  what keeps Defender's own `AddIndicator` IoC sync (logged as `UserType` 5) out — the single
+  biggest source of noise. `ALWAYS_ADMIN_WORKLOADS` (empty by default) is an escape hatch to
+  keep curated ops on a named workload even when app-attributed.
+
+> **Exchange needs one subscription.** Exchange admin events (RecordType 1) only flow if the
+> `office365` module subscribes to `Audit.Exchange`. Add
+> `<subscription>Audit.Exchange</subscription>` inside `<office365><subscriptions>` in
+> `ossec.conf` and restart the manager. `Audit.General` (already common) is what carries the
+> Security & Compliance / Defender / Purview cmdlets. Add `DLP.All` for the full DLP feed.
+
+### Defender for Endpoint / Defender XDR portal changes
+
+Changes made in **security.microsoft.com** (advanced features, data retention, indicators,
+alert-suppression rules, RBAC, Defender Experts settings) reach the Unified Audit Log **only
+if you enable the "Unified audit log" advanced feature** in *Settings → Endpoints → General
+→ Advanced features*. Once on, they appear under Defender-specific workloads —
+`MicrosoftDefenderForEndpoint`, `Microsoft365Defender`, `MicrosoftDefenderExperts`,
+`MicrosoftDefenderForIdentity`, `MicrosoftDefenderForCloudApps` — with **portal action
+names, not `Verb-Noun` cmdlets** (e.g. record types `MSDEIndicatorsSettings`,
+`MS365DSuppressionRule`). The collector treats those workloads as **settings surfaces**:
+any human-admin operation that isn't an obvious read / SOC-operational action
+(`OFFICE365_SETTINGS_DENY`) is kept. This is a broad default-allow — after enabling the
+toggle, run `--dry-run` and tighten `OFFICE365_SETTINGS_DENY` / pin exact ops in
+`OFFICE365_CURATED_OPS` once you see the real operation names.
+
+> **Not everything is exposed.** Even with the toggle on, some portal areas emit nothing to
+> the audit log. Endpoint **security policies** (AV/ASR/firewall/EDR) are Intune-backed and
+> are instead audited via Graph `deviceManagement/auditEvents` — i.e. the Entra/Intune
+> poller half, not this collector.
+
+### Deploy (mirrors the digest install)
+
+```bash
+# 1. Ship the collector into the same venv/dir as the digest
+sudo install -o wazuh-recipes -g wazuh-recipes -m 0750 \
+  bin/entra-config-changes_office365.py /opt/entra-config-changes-digest/
+
+# 2. Indexer password (this half needs no Graph secret). Reuse the digest env file, or:
+sudo cp systemd/entra-config-changes-office365.env.example \
+        /opt/entra-config-changes-digest/entra-config-changes-office365.env
+sudoedit /opt/entra-config-changes-digest/entra-config-changes-office365.env   # set INDEX_PASSWORD
+sudo chown wazuh-recipes:wazuh-recipes /opt/entra-config-changes-digest/entra-config-changes-office365.env
+sudo chmod 600 /opt/entra-config-changes-digest/entra-config-changes-office365.env
+
+# 3. Preview → baseline → schedule (own state DB, separate from the poller)
+PY=/opt/entra-config-changes-digest/venv/bin/python
+APP=/opt/entra-config-changes-digest/entra-config-changes_office365.py
+sudo -u wazuh-recipes $PY $APP --dry-run --lookback-hours 168      # counts + what would send
+sudo -u wazuh-recipes $PY $APP --seed    --lookback-hours 168      # baseline, no mail
+sudo cp systemd/entra-config-changes-office365.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now entra-config-changes-office365.timer
+```
+
+A healthy `--dry-run` prints `[gather] … admin_config_changes=N` and one `CHANGE …` line per
+change (actor, UserType, workload, operation, target). Tuning knobs (`OFFICE365_WORKLOADS`,
+`OFFICE365_CURATED_OPS`, `ADMIN_USERTYPES`, `OFFICE365_EXCLUDE_AAD`, …) are documented in
+`systemd/entra-config-changes-office365.env.example`.
+
 ## Usage
 
 ```bash

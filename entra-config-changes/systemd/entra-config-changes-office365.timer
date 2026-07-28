@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Wazuh Microsoft 365 admin config-change check every 15 minutes
+
+[Timer]
+# The office365 module polls the Management Activity API every ~1 min, but that API has
+# ingestion latency (minutes up to ~an hour). A 15-min cadence with a 24h lookback and
+# SQLite dedup catches late-arriving events without re-notifying.
+OnCalendar=*:0/15
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

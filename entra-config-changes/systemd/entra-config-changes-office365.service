@@ -1,0 +1,26 @@
+[Unit]
+Description=Wazuh Microsoft 365 admin config-change tickets (Exchange/Defender/Purview; notify-once)
+After=network-online.target wazuh-indexer.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Reads the Wazuh Indexer, writes a small SQLite file, sends mail -- no root needed.
+# Run as a dedicated, unprivileged service user (see README).
+User=wazuh-recipes
+Group=wazuh-recipes
+# Hard ceiling so a hung SMTP/indexer connection can never wedge the unit.
+RuntimeMaxSec=600
+# Secrets (indexer password; NO Graph secret needed -- this half doesn't call Graph).
+# INDEX_PASSWORD (or WAZUH_INDEXER_PASSWORD) must be set here. Reuse the digest env file
+# or point at its own; keep it chmod 600.
+EnvironmentFile=/opt/entra-config-changes-digest/entra-config-changes.env
+# >>> set recipients + SMTP relay here (or in the env file) <<<
+ExecStart=/opt/entra-config-changes-digest/venv/bin/python \
+          /opt/entra-config-changes-digest/entra-config-changes_office365.py \
+          --recipients security@example.com \
+          --smtp-server smtp.example.com \
+          --state-db /opt/entra-config-changes-digest/office365-state.db
+
+[Install]
+WantedBy=multi-user.target

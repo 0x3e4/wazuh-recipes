@@ -125,6 +125,14 @@ IGNORE_PARAMS = {x.strip().lower() for x in os.environ.get(
     "OFFICE365_IGNORE_PARAMS",
     "confirm,whatif,erroraction,warningaction,force,verbose,debug,outvariable,outbuffer,"
     "pipelinevariable,informationaction,warningvariable,errorvariable,progressaction").split(",") if x.strip()}
+# Actor identities (matched against UserId / UserKey / ClientApplication) that are Microsoft
+# datacenter/service principals, NOT humans. They report UserType=Admin yet only run
+# automated, non-human cmdlets (e.g. `NT SERVICE\MSExchangeAdminApiNetCore` running
+# Remove-StoreMailbox), so they are dropped regardless of Operation/UserType. Case-insensitive
+# substring match. Extend via the env var (comma-separated substrings).
+ACTOR_DENY_SUBSTR = {x.strip().lower() for x in os.environ.get(
+    "OFFICE365_ACTOR_DENY",
+    "nt service\\,nt authority\\").split(",") if x.strip()}
 
 _ACCENT = "#b3261e"
 _MAX_VAL_LEN = 300
@@ -403,6 +411,12 @@ def classify_event(hit):
         return None
 
     actor = str(o.get("UserId") or o.get("UserKey") or "")
+    # Drop Microsoft datacenter/service identities: they report UserType=Admin yet only run
+    # automated, non-human cmdlets (e.g. NT SERVICE\MSExchange... running Remove-StoreMailbox).
+    if ACTOR_DENY_SUBSTR:
+        _actor_probe = (actor + " " + str(o.get("ClientApplication") or "")).lower()
+        if any(pat in _actor_probe for pat in ACTOR_DENY_SUBSTR):
+            return None
     params = parse_cmdlet_parameters(o.get("Parameters"))
     mods = o.get("ModifiedProperties")
     mods = mods if isinstance(mods, list) else []

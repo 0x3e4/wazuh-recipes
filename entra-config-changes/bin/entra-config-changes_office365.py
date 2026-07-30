@@ -120,6 +120,23 @@ CURATED_OPS = {x.strip().lower() for x in os.environ.get(
     "TeamsAdminAction,AddIndicator,SecurityRoleUpdated,SecurityRoleCreated").split(",") if x.strip()}
 # Exclude AzureActiveDirectory (RecordType 8) — the Graph poller already covers Entra.
 EXCLUDE_AAD = os.environ.get("OFFICE365_EXCLUDE_AAD", "1").strip().lower() in ("1", "true", "yes", "on")
+# Self-service / per-user Exchange cmdlets. Outlook/OWA run these on the user's OWN mailbox
+# when someone changes their personal settings (calendar, language, auto-reply, junk, inbox
+# rules, ...). Exchange logs them as admin-style Set-*/New-* cmdlets, often with
+# UserType=Admin, but they are NOT admin configuration changes -- classic Exchange audit
+# noise. Dropped outright. (This collector has no directory lookup, so it can't prove
+# actor==mailbox-owner structurally; an explicit deny-list is the reliable filter.)
+# NOTE: inbox-rule creation can be security-relevant (auto-forwarding used in BEC) -- but
+# that is a per-user detection concern, not admin config; handle it in a dedicated rule.
+IGNORE_OPS = {x.strip().lower() for x in os.environ.get(
+    "OFFICE365_IGNORE_OPS",
+    "Set-MailboxCalendarConfiguration,Set-MailboxRegionalConfiguration,"
+    "Set-MailboxMessageConfiguration,Set-MailboxAutoReplyConfiguration,"
+    "Set-MailboxCalendarFolder,Set-MailboxSpellingConfiguration,"
+    "Set-MailboxJunkEmailConfiguration,Set-MailboxSearchPreference,"
+    "Set-UserPhoto,Remove-UserPhoto,Set-Clutter,Set-FocusedInbox,Set-MailboxProfile,"
+    "New-InboxRule,Set-InboxRule,Remove-InboxRule,Enable-InboxRule,Disable-InboxRule"
+    ).split(",") if x.strip()}
 # PowerShell common/uninteresting parameters to drop from the rendered parameter table.
 IGNORE_PARAMS = {x.strip().lower() for x in os.environ.get(
     "OFFICE365_IGNORE_PARAMS",
@@ -398,6 +415,8 @@ def classify_event(hit):
     operation = str(o.get("Operation") or "")
 
     if EXCLUDE_AAD and record_type == "8":
+        return None
+    if operation.strip().lower() in IGNORE_OPS:   # self-service / per-user cmdlets -> noise
         return None
     kind = classify_kind(operation, workload)
     if kind is None:

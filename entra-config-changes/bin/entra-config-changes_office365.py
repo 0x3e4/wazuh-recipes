@@ -37,6 +37,9 @@ import smtplib
 import sqlite3
 import hashlib
 import argparse
+import urllib.request
+import urllib.parse
+import urllib.error
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 try:
@@ -135,7 +138,10 @@ IGNORE_OPS = {x.strip().lower() for x in os.environ.get(
     "Set-MailboxCalendarFolder,Set-MailboxSpellingConfiguration,"
     "Set-MailboxJunkEmailConfiguration,Set-MailboxSearchPreference,"
     "Set-UserPhoto,Remove-UserPhoto,Set-Clutter,Set-FocusedInbox,Set-MailboxProfile,"
-    "New-InboxRule,Set-InboxRule,Remove-InboxRule,Enable-InboxRule,Disable-InboxRule"
+    "New-InboxRule,Set-InboxRule,Remove-InboxRule,Enable-InboxRule,Disable-InboxRule,"
+    # Scheduled/system maintenance cmdlets (address-book/list regeneration) -- run by the
+    # service, logged as Update-* by UserType=Admin, but not a configuration change.
+    "Update-OfflineAddressBook,Update-AddressList,Update-GlobalAddressList,Update-Recipient"
     ).split(",") if x.strip()}
 # PowerShell common/uninteresting parameters to drop from the rendered parameter table.
 IGNORE_PARAMS = {x.strip().lower() for x in os.environ.get(
@@ -150,6 +156,28 @@ IGNORE_PARAMS = {x.strip().lower() for x in os.environ.get(
 ACTOR_DENY_SUBSTR = {x.strip().lower() for x in os.environ.get(
     "OFFICE365_ACTOR_DENY",
     "nt service\\,nt authority\\").split(",") if x.strip()}
+
+# --- privileged-admin gating via Microsoft Graph (optional) ---------------------------
+# UserType=Admin in the O365 audit is NOT a reliable "privileged admin" signal (it is also
+# stamped on self-service user cmdlets and system/maintenance operations). To gate on ACTUAL
+# admin-role membership, resolve each actor against the members of the configured directory
+# role template(s) via Graph -- the same mechanism the Entra poller uses. Reuses the poller's
+# app registration; needs the RoleManagement.Read.Directory application permission consented.
+MS_GRAPH_TENANT_ID = os.environ.get("MS_GRAPH_TENANT_ID", "")
+MS_GRAPH_CLIENT_ID = os.environ.get("MS_GRAPH_CLIENT_ID", "")
+MS_GRAPH_SECRET    = os.environ.get("MS_GRAPH_SECRET", "")
+_GA_TEMPLATE = "62e90394-69f5-4237-9190-012177145e10"   # Global Administrator
+# Accept the poller's variable name (GLOBAL_ADMIN_ROLE_TEMPLATE_IDS) and an alias. Add more
+# role template ids to widen "privileged admin" (Exchange Admin, Security Admin, ...).
+ADMIN_ROLE_TEMPLATE_IDS = [x.strip() for x in (
+    os.environ.get("GLOBAL_ADMIN_ROLE_TEMPLATE_IDS")
+    or os.environ.get("ADMIN_ROLE_TEMPLATE_IDS")
+    or _GA_TEMPLATE).split(",") if x.strip()]
+GRAPH_ROLE_CACHE_HOURS = int(os.environ.get("GRAPH_ROLE_CACHE_HOURS", "6"))
+# auto = gate only if MS_GRAPH_* creds are present; 1/on = require (error if missing);
+# 0/off = never gate (rely on UserType + deny-lists only).
+REQUIRE_ADMIN_ROLE = os.environ.get("OFFICE365_REQUIRE_ADMIN_ROLE", "auto").strip().lower()
+GRAPH = "https://graph.microsoft.com/v1.0"
 
 _ACCENT = "#b3261e"
 _MAX_VAL_LEN = 300
@@ -507,6 +535,113 @@ def event_key(rec):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 # =====================================================================
+# Privileged-admin gating via Microsoft Graph (optional)
+# =====================================================================
+
+def _graph_token():
+    url = f"https://login.microsoftonline.com/{MS_GRAPH_TENANT_ID}/oauth2/v2.0/token"
+    data = urllib.parse.urlencode({
+        "grant_type": "client_credentials", "client_id": MS_GRAPH_CLIENT_ID,
+        "client_secret": MS_GRAPH_SECRET, "scope": "https://graph.microsoft.com/.default"}).encode()
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        tok = json.load(r).get("access_token")
+    if not tok:
+        raise RuntimeError("Graph token request returned no access_token")
+    return tok
+
+def _graph_get(url, token):
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
+                                               "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+def get_privileged_principals(conn, token):
+    """Cached set of lowercased identifiers (UPNs + object-ids) that are members of the
+    configured admin role template(s). O365 actors are UPNs, so match primarily on UPN.
+    Returns None if unavailable and no cache exists."""
+    now = datetime.now(timezone.utc)
+    row = conn.execute("SELECT v FROM meta WHERE k='admin_roles_cached_at'").fetchone()
+    if row and row[0]:
+        try:
+            if now - datetime.fromisoformat(row[0]) < timedelta(hours=GRAPH_ROLE_CACHE_HOURS):
+                cached = _principals_from_db(conn)
+                if cached:
+                    return cached
+        except ValueError:
+            pass
+    try:
+        members = {}   # object_id -> upn
+        for tid in ADMIN_ROLE_TEMPLATE_IDS:
+            url = f"{GRAPH}/directoryRoles(roleTemplateId='{tid}')/members?$select=id,userPrincipalName"
+            while url:
+                try:
+                    data = _graph_get(url, token)
+                except urllib.error.HTTPError as e:
+                    if e.code == 404:
+                        print(f"[gate] role template {tid} not activated (404); skipping")
+                        break
+                    raise
+                for m in data.get("value", []):
+                    if m.get("id"):
+                        members[m["id"]] = m.get("userPrincipalName") or ""
+                url = data.get("@odata.nextLink")
+        conn.execute("DELETE FROM admin_roles")
+        conn.executemany("INSERT OR REPLACE INTO admin_roles(object_id, upn) VALUES (?,?)",
+                         list(members.items()))
+        conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('admin_roles_cached_at', ?)",
+                     (now.strftime("%Y-%m-%dT%H:%M:%S+00:00"),))
+        conn.commit()
+        print(f"[gate] privileged-admin set: {len(members)} member(s) "
+              f"across {len(ADMIN_ROLE_TEMPLATE_IDS)} role template(s)")
+        return _principals_from_db(conn)
+    except Exception as e:
+        cached = _principals_from_db(conn)
+        if cached:
+            print(f"[gate] role lookup failed ({e}); using stale cache ({len(cached)} principals)")
+            return cached
+        print(f"[gate] WARNING: role lookup failed ({e}) and no cache")
+        return None
+
+def _principals_from_db(conn):
+    out = set()
+    for oid, upn in conn.execute("SELECT object_id, upn FROM admin_roles"):
+        if oid:
+            out.add(str(oid).strip().lower())
+        if upn:
+            out.add(str(upn).strip().lower())
+    return out
+
+def apply_admin_gate(conn, kept, args):
+    """Filter kept records to those whose actor is a member of the configured admin role(s).
+    Fail-open (keep all, with a warning) if Graph is unavailable so a transient outage does
+    not silently drop real changes -- the deny-lists still apply either way."""
+    creds = bool(MS_GRAPH_TENANT_ID and MS_GRAPH_CLIENT_ID and MS_GRAPH_SECRET)
+    if REQUIRE_ADMIN_ROLE in ("0", "off", "false", "no") or (REQUIRE_ADMIN_ROLE == "auto" and not creds):
+        if REQUIRE_ADMIN_ROLE == "auto":
+            print("[gate] role gating OFF (no MS_GRAPH_* creds) -- UserType + deny-lists only")
+        return kept
+    if not creds:
+        raise SystemExit("OFFICE365_REQUIRE_ADMIN_ROLE is on but MS_GRAPH_TENANT_ID/CLIENT_ID/"
+                         "SECRET are not set.")
+    try:
+        token = _graph_token()
+    except Exception as e:
+        print(f"[gate] WARNING: Graph token failed ({e}); keeping all (deny-lists still apply)")
+        return kept
+    principals = get_privileged_principals(conn, token)
+    if not principals:
+        print("[gate] WARNING: privileged-admin set empty/unavailable; keeping all")
+        return kept
+    before = len(kept)
+    out = [r for r in kept if (r.get("actor_upn") or r.get("actor_id") or "").strip().lower() in principals]
+    dropped = before - len(out)
+    print(f"[gate] privileged-admin filter: kept {len(out)}/{before} "
+          f"(dropped {dropped} non-admin/self-service/system actor(s))")
+    return out
+
+# =====================================================================
 # State DB (notify-once)
 # =====================================================================
 
@@ -530,6 +665,7 @@ def init_db(conn):
         event_key TEXT PRIMARY KEY, source TEXT, actor TEXT, action TEXT,
         resource TEXT, changed_at TEXT, notified_at TEXT)""")
     conn.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS admin_roles (object_id TEXT PRIMARY KEY, upn TEXT)")
     conn.commit()
 
 def mark_notified(conn, rec, now):
@@ -830,6 +966,7 @@ def run(args):
                              "to preview without seeding.")
 
         kept = gather(client, args)
+        kept = apply_admin_gate(conn, kept, args)
 
         if args.test:
             if not kept:

@@ -261,6 +261,21 @@ depending on how they were invoked. So:
   what keeps Defender's own `AddIndicator` IoC sync (logged as `UserType` 5) out — the single
   biggest source of noise. `ALWAYS_ADMIN_WORKLOADS` (empty by default) is an escape hatch to
   keep curated ops on a named workload even when app-attributed.
+- **Self-service / maintenance cmdlets are denied** (`OFFICE365_IGNORE_OPS`): Outlook/OWA log
+  per-user actions (`Set-MailboxCalendarConfiguration`, inbox rules, …) and Exchange logs
+  scheduled maintenance (`Update-OfflineAddressBook`, address-list regeneration) as
+  admin-style `Set-*`/`Update-*` cmdlets with `UserType=Admin` — they are not admin config.
+
+**Recommended: gate on real admin-role membership (Graph).** Because `UserType` is unreliable,
+the robust filter is to keep only actors who are members of your admin role(s). Set
+`MS_GRAPH_TENANT_ID`/`CLIENT_ID`/`SECRET` (reuses the Entra poller's app; needs
+`RoleManagement.Read.Directory`) and the collector resolves each actor's UPN against the
+members of `ADMIN_ROLE_TEMPLATE_IDS` (default Global Administrator; add role ids to widen),
+cached for `GRAPH_ROLE_CACHE_HOURS`. Non-members — self-service users, service/maintenance
+contexts, legacy-DN actors — are dropped. `OFFICE365_REQUIRE_ADMIN_ROLE=auto` enables it
+whenever creds are present; if Graph is unreachable it fails **open** (keeps events, warns)
+so an outage never silently drops real changes. Without creds the collector falls back to
+`UserType` + the deny-lists.
 
 > **Exchange needs one subscription.** Exchange admin events (RecordType 1) only flow if the
 > `office365` module subscribes to `Audit.Exchange`. Add

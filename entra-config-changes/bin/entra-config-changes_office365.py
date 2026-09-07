@@ -382,6 +382,23 @@ def _display_param_value(v):
         s = s[:_MAX_VAL_LEN] + " …"
     return s
 
+def extract_params(raw):
+    """Return [(name, raw_value)] from an audit Parameters field, which comes in TWO shapes:
+      * Exchange admin (RecordType 1): a JSON array of {"Name","Value"} objects.
+      * Security & Compliance (RecordType 18): a single PowerShell-style string.
+    Also tolerates a dict-of-name->value."""
+    if isinstance(raw, list):
+        out = []
+        for p in raw:
+            if isinstance(p, dict):
+                name = p.get("Name") or p.get("name")
+                if name:
+                    out.append((str(name), p.get("Value", p.get("value", ""))))
+        return out
+    if isinstance(raw, dict):
+        return [(str(k), v) for k, v in raw.items()]
+    return parse_cmdlet_parameters(raw)
+
 def _param_value(params, name):
     for n, v in params:
         if n.lower() == name.lower():
@@ -464,7 +481,7 @@ def classify_event(hit):
         _actor_probe = (actor + " " + str(o.get("ClientApplication") or "")).lower()
         if any(pat in _actor_probe for pat in ACTOR_DENY_SUBSTR):
             return None
-    params = parse_cmdlet_parameters(o.get("Parameters"))
+    params = extract_params(o.get("Parameters"))
     mods = o.get("ModifiedProperties")
     mods = mods if isinstance(mods, list) else []
 

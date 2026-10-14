@@ -385,6 +385,25 @@ def product_base(name):
 _FAMILY_ALIASES = (
     ("samba", ("samba", "smbclient", "wbclient", "libldb", "python3-ldb",
                "libtevent", "libtalloc", "libtdb")),
+    # curl: the runtime libs carry soname digits + TLS-flavour suffixes
+    # (libcurl4, libcurl3-gnutls, libcurl3t64-gnutls) that the heuristic below
+    # can't unify with the 'curl' CLI package -> curate them into one remediation.
+    ("curl", ("curl",)),
+    # A member starting with '^' is a regex anchored at the name start instead of
+    # a substring -- for stems that also occur inside unrelated package names.
+    # erlang: Debian splits the runtime into ~20 erlang-* packages, one upgrade.
+    ("erlang", ("^erlang",)),
+    # perl: interpreter + perl-base/perl-modules-X.Y/libperlX.Y; anchored so the
+    # many lib*-perl module packages stay separate products.
+    ("perl", ("^perl$", "^perl-base", "^perl-modules", "^libperl")),
+    # openssl: Debian openssl/libssl3 and the Windows 'OpenSSL (Light) (64-bit)'
+    # installers; anchored so python3-openssl stays separate.
+    ("openssl", ("^openssl", "^libssl")),
+    # Exchange: server, Subscription Edition and one entry per language pack --
+    # all fixed by the same CU/SU.
+    ("Microsoft Exchange Server", ("^microsoft exchange server",)),
+    # Firefox: one installer entry per locale, e.g. 'Mozilla Firefox (x64 de)'.
+    ("Mozilla Firefox", ("^mozilla firefox",)),
 )
 
 def product_family(name):
@@ -394,7 +413,8 @@ def product_family(name):
     libpython3.12-stdlib, libpython3.12t64 collapse to one key."""
     raw = product_base(name).strip().lower()
     for canon, subs in _FAMILY_ALIASES:
-        if any(sub in raw for sub in subs):
+        if any((re.match(sub, raw) if sub.startswith("^") else sub in raw)
+               for sub in subs):
             return canon
     s = raw
     if s.startswith("lib") and len(s) > 4:

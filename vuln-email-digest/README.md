@@ -51,7 +51,8 @@ list, and reconciles the result against a small SQLite database. A finding is ke
 `(agent, CVE, package, version)`; the database remembers what has been mailed (`notified_at`) and when
 each finding was last seen. For the email, findings are bucketed into a **product family** (embedded
 versions, the `lib` prefix and Debian sub-package suffixes like `-minimal`/`-stdlib`/`t64` are
-stripped; a small curated alias list folds heterogeneous sets such as samba) so the output is one mail
+stripped; a small curated alias list folds heterogeneous sets such as samba, erlang or the Exchange
+language packs) so the output is one mail
 per product to fix.
 
 ## Repository layout
@@ -164,7 +165,7 @@ All near the top of `bin/wazuh_vuln_digest.py`:
 
 - **Severity** — pass `--severity Critical,High` (or set `DIGEST_SEVERITY`) to restrict; empty (the default) includes every severity.
 - **`EXCLUDED_PACKAGES`** (empty by default) + the substring hook in `is_excluded` — packages recorded in the DB but never emailed. Add your own noise (e.g. kernels `linux-image*`, AD/SSSD packages) to taste.
-- **`_FAMILY_ALIASES`** — fold products whose package names share no common stem into one ticket (samba is pre-seeded; add your own, e.g. `("openssl", ("libssl", "openssl"))`).
+- **`_FAMILY_ALIASES`** — fold products whose package names share no common stem into one ticket. Pre-seeded: samba, curl, erlang, perl, openssl, Microsoft Exchange Server (incl. language packs) and Mozilla Firefox (one entry per locale). A member is a substring of the lower-cased package name; a member starting with `^` is a regex anchored at the start instead (e.g. `"^libperl"`), for stems that also occur inside unrelated names such as the many `lib*-perl` modules.
 - **`RESOLVE_GRACE_HOURS`** / **`DEFAULT_RENOTIFY_DAYS`** — anti-flap and aging thresholds.
 - Connection/SMTP/dashboard defaults are read from env (`WAZUH_INDEXER_PASSWORD`, `SMTP_SERVER`, `MAIL_FROM`, `WAZUH_DASHBOARD`, `DIGEST_RECIPIENTS`, `DIGEST_SEVERITY`) — see the env example.
 

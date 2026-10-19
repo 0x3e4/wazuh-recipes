@@ -15,7 +15,8 @@ and collapses it into actionable, low-noise tickets with a small stateful poller
 
 - **Complete coverage** — reads the live inventory, so every currently-vulnerable agent is included, not just the ones that changed state in the last scan.
 - **One ticket per remediation** — all CVEs, versions and agents of a product are merged into a single mail (e.g. `apt upgrade python3.12` → one ticket, not 5 sub-package mails).
-- **Notify-once** — each finding is emailed exactly once; it is never re-announced while it stays open.
+- **Notify-once** — each finding is emailed exactly once per agent + CVE + package; it is never re-announced while it stays open, not even when an upgrade changes the package version but Wazuh still reports the CVE.
+- **Feed-lag hint** — when Wazuh knows no fixed version for a CVE (`Package default status`), the ticket says so and points to the vendor/distribution tracker, because the Wazuh feed often lags new security updates by a day or two.
 - **Anti-flap** — Wazuh re-stamps some findings daily; a finding only counts as *resolved* after it has been gone for a grace window (default 7 days), so daily re-scans don't generate repeat mail.
 - **HTML email** — severity-coloured, with CVSS, references, affected agents as **clickable dashboard deep-links**, plus a plain-text fallback.
 - **Two cadences** — hourly *tickets* (new/resolved), and a separate weekly *report* (full current open state).
@@ -49,7 +50,8 @@ agents as clickable dashboard links and a plain-text fallback:
 The poller queries the indexer (optionally filtered by `--severity`), applies an optional exclusion
 list, and reconciles the result against a small SQLite database. A finding is keyed by
 `(agent, CVE, package, version)`; the database remembers what has been mailed (`notified_at`) and when
-each finding was last seen. For the email, findings are bucketed into a **product family** (embedded
+each finding was last seen. A new version of an already-mailed `(agent, CVE, package)` inherits its
+`notified_at`, so an upgrade that does not (yet) clear the CVE does not produce a second mail. For the email, findings are bucketed into a **product family** (embedded
 versions, the `lib` prefix and Debian sub-package suffixes like `-minimal`/`-stdlib`/`t64` are
 stripped; a small curated alias list folds heterogeneous sets such as samba, erlang or the Exchange
 language packs) so the output is one mail
@@ -164,7 +166,7 @@ sudo -u wazuh-vuln $PY $APP --severity Critical,High --dry-run                  
 All near the top of `bin/wazuh_vuln_digest.py`:
 
 - **Severity** — pass `--severity Critical,High` (or set `DIGEST_SEVERITY`) to restrict; empty (the default) includes every severity.
-- **`EXCLUDED_PACKAGES`** (empty by default) + the substring hook in `is_excluded` — packages recorded in the DB but never emailed. Add your own noise (e.g. kernels `linux-image*`, AD/SSSD packages) to taste.
+- **`EXCLUDED_PATTERNS`** / **`EXCLUDED_PACKAGES`** (both empty by default) — products recorded in the DB but never emailed. `EXCLUDED_PATTERNS` matches the lower-cased package name: a substring, or a regex anchored at the start if it begins with `^` (e.g. `"^mozilla firefox"`, `"^microsoft windows 11"`, `r"^openssl .*\(64-bit\)"` for Windows OpenSSL installers only); `EXCLUDED_PACKAGES` holds exact names. Removing a pattern later makes its findings mailable again — run `--dry-run` first.
 - **`_FAMILY_ALIASES`** — fold products whose package names share no common stem into one ticket. Pre-seeded: samba, curl, erlang, perl, openssl, Microsoft Exchange Server (incl. language packs) and Mozilla Firefox (one entry per locale). A member is a substring of the lower-cased package name; a member starting with `^` is a regex anchored at the start instead (e.g. `"^libperl"`), for stems that also occur inside unrelated names such as the many `lib*-perl` modules.
 - **`RESOLVE_GRACE_HOURS`** / **`DEFAULT_RENOTIFY_DAYS`** — anti-flap and aging thresholds.
 - Connection/SMTP/dashboard defaults are read from env (`WAZUH_INDEXER_PASSWORD`, `SMTP_SERVER`, `MAIL_FROM`, `WAZUH_DASHBOARD`, `DIGEST_RECIPIENTS`, `DIGEST_SEVERITY`) — see the env example.
@@ -196,6 +198,9 @@ A healthy `--dry-run` prints a `[notify] … severity=… total=… eligible=…
 - **Inventory-diff, not event-stream.** If an agent is offline longer than the resolve grace, its
   findings are reported resolved and then new again on return — raise `--resolve-grace-hours` to absorb
   longer outages.
+- **Wazuh feed lag.** `Package default status` means the Wazuh feed knows no fixed version, so even an
+  already-patched package is reported until the feed catches up (usually 1–2 days after a new security
+  update). The ticket flags these CVEs; check the vendor/distribution tracker before patching.
 - HTML is built for broad client support (table + `bgcolor`); exotic dark-mode clients may still
   recolour backgrounds, but the severity accents always render.
 

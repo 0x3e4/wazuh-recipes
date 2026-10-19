@@ -68,8 +68,20 @@ _SEV_COLOR = {"critical": "#c0392b", "high": "#e67e22", "medium": "#d4ac0d", "lo
 # Substring matches can be added in is_excluded() below.
 EXCLUDED_PACKAGES = set()
 
+# Products never mailed, matched case-insensitively against the package name.
+# A member starting with '^' is a regex anchored at the name start, anything else
+# is a substring. Excluded findings are still recorded in the DB, so a finding
+# becomes mailable again if its pattern is removed. Examples:
+#   "^mozilla firefox"          client browser, self-updating
+#   "^microsoft windows 11"     client OS, patched via Windows Update
+#   r"^openssl .*\(64-bit\)"   Windows OpenSSL installers only (not Linux openssl)
+EXCLUDED_PATTERNS = ()
+
 def is_excluded(package_name, description=""):
     name = package_name or ""
+    low = name.lower()
+    if any((re.match(p, low) if p.startswith("^") else p in low) for p in EXCLUDED_PATTERNS):
+        return True
     if name in EXCLUDED_PACKAGES:
         return True
     # Add your own substring rules here if needed, e.g.:
@@ -115,8 +127,12 @@ _SOURCE_FIELDS = [
     "package.type", "package.architecture", "package.installed",
     "vulnerability.id", "vulnerability.cve", "vulnerability.severity",
     "vulnerability.description", "vulnerability.reference",
-    "vulnerability.score", "vulnerability.cvss",
+    "vulnerability.score", "vulnerability.cvss", "vulnerability.scanner.condition",
 ]
+
+# Wazuh condition when its feed knows no fixed version: every installed version is
+# reported, even one the vendor already fixed (feed often lags new DSAs by 1-2 days).
+FIX_UNKNOWN_CONDITION = "Package default status"
 
 def _map_vuln_hit(s):
     """Map one indexer _source doc to our row dict (flat ECS or legacy)."""
@@ -141,6 +157,7 @@ def _map_vuln_hit(s):
         "score":             str(base) if base is not None else "N/A",
         "reference":         str(v.get("reference", "")),
         "description":       str(v.get("description", v.get("title", ""))),
+        "condition":         str((v.get("scanner") or {}).get("condition", "") or ""),
     }
 
 def collect_open_vuln_docs(client, index_pattern, severities=None):
@@ -189,8 +206,10 @@ def persist_and_diff(conn, rows, seed=False, renotify_days=DEFAULT_RENOTIFY_DAYS
     # renotify_days <= 0 disables the aging re-notify: push the cutoff far into the past so
     # no still-open vuln is ever "older than the threshold" (0 must NOT mean cutoff=now, which
     # would re-notify every run).
-    cutoff = (datetime.now(timezone.utc)
-              - timedelta(days=(renotify_days if renotify_days > 0 else 3650000))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # 0 disables aging: an epoch cutoff instead of date arithmetic (timedelta of
+    # ~10,000 years overflowed datetime -> OverflowError on every run)
+    cutoff = ((datetime.now(timezone.utc) - timedelta(days=renotify_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+              if renotify_days > 0 else "1970-01-01T00:00:00Z")
     resolve_cutoff = (datetime.now(timezone.utc) - timedelta(hours=resolve_grace_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
     cur = conn.cursor()
 
@@ -201,6 +220,7 @@ def persist_and_diff(conn, rows, seed=False, renotify_days=DEFAULT_RENOTIFY_DAYS
 
     current_keys = set()
     new_rows = []
+    inherited = 0
     for row in rows:
         k = vuln_key(row["agent_id"], row["cve"], row["package_name"], row["package_version"])
         row["vuln_key"] = k
@@ -216,6 +236,18 @@ def persist_and_diff(conn, rows, seed=False, renotify_days=DEFAULT_RENOTIFY_DAYS
                 send_count = 0
                 last_sent = None
             notified = last_sent   # seed-eligible -> now (baselined as mailed); else NULL until mailed
+            # same agent + CVE + package already mailed under another version (upgrade
+            # without fix, or the feed not knowing the fix yet) -> don't mail again
+            sib = None
+            if not seed and not excluded:
+                sib = conn.execute("""SELECT notified_at FROM sent_vulnerabilities
+                                       WHERE agent_id=? AND cve=? AND package_name=?
+                                         AND notified_at IS NOT NULL
+                                       ORDER BY notified_at LIMIT 1""",
+                                   (row["agent_id"], row["cve"], row["package_name"])).fetchone()
+            if sib:
+                notified = sib[0]
+                inherited += 1
             conn.execute("""
                 INSERT INTO sent_vulnerabilities
                     (vuln_key, agent_id, agent_name, cve, package_name, package_version,
@@ -223,7 +255,7 @@ def persist_and_diff(conn, rows, seed=False, renotify_days=DEFAULT_RENOTIFY_DAYS
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (k, row["agent_id"], row["agent_name"], row["cve"], row["package_name"],
                   row["package_version"], row["severity"], "active", now, now, last_sent, send_count, notified))
-            if (not seed) and (not excluded):
+            if (not seed) and (not excluded) and not sib:
                 new_rows.append(row)
         else:
             conn.execute("""
@@ -235,6 +267,9 @@ def persist_and_diff(conn, rows, seed=False, renotify_days=DEFAULT_RENOTIFY_DAYS
             # reappearance clears notified_at (see RESOLVED) so it can notify again.
             if (not seed) and (not excluded) and (prev["notified_at"] is None):
                 new_rows.append(row)
+
+    if inherited:
+        print(f"[notify] {inherited} finding(s) only changed package version - already notified, not re-mailed")
 
     # NOTE: NEW/aging rows are marked as reported only AFTER a successful send
     # (see mark_reported); we do not commit here so --dry-run can roll back and
@@ -294,6 +329,8 @@ def group_by_cve_product_version(rows):
                  "package_installed": r.get("package_installed", ""), "package_path": r.get("package_path", "")}
             groups[key] = g
         g["agents"][r["agent_name"]] = r.get("agent_id", "")
+        if r.get("condition") == FIX_UNKNOWN_CONDITION:
+            g["fix_unknown"] = True
         if (not g.get("score") or g["score"] == "N/A") and r.get("score"):
             g["score"] = r["score"]
         if not g.get("reference") and r.get("reference"):
@@ -482,6 +519,9 @@ def build_product_text(groups, resolved=False):
         ref = next((g.get("reference") for g in cg if g.get("reference")), "")
         if ref and not resolved:
             L.append(f"    reference: {ref}")
+        if not resolved and any(g.get("fix_unknown") for g in cg):
+            L.append("    NOTE: fixed version unknown to the Wazuh feed - check the vendor/Debian "
+                     "tracker before patching (the feed often lags new security updates by 1-2 days)")
     return "\n".join(L)
 
 # ---------- HTML rendering ----------
@@ -632,9 +672,13 @@ def build_product_html(groups, dash, resolved=False):
             for g in sorted(cg, key=lambda x: x["package_version"]))
         refhtml = (f'<div style="font-size:12px;color:#64748b;margin-top:5px;">References: {_ref_links_html(ref)}</div>'
                    if (not resolved and ref) else "")
+        fixhint = ('<div style="font-size:12px;color:#92400e;background:#fef3c7;padding:4px 6px;margin-top:6px;">'
+                   '&#9888; Fixed version unknown to the Wazuh feed &ndash; check the vendor/Debian tracker '
+                   'before patching (the feed often lags new security updates by 1&ndash;2 days).</div>'
+                   if (not resolved and any(g.get("fix_unknown") for g in cg)) else "")
         content = (f'<div style="font-size:15px;font-weight:bold;color:#0f172a;margin-bottom:4px;">{_esc(cve)}</div>'
                    + (f'<div style="margin-bottom:6px;">{badge}</div>' if badge else "")
-                   + vlines + refhtml)
+                   + vlines + refhtml + fixhint)
         cards.append(
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="{color}" '
             f'style="background:{color};"><tr><td style="padding-left:4px;">'
